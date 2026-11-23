@@ -410,7 +410,7 @@ func helpText() string {
 		"",
 		"What WinPrep does NOT do:",
 		"",
-		"  - It is not a factory reset and not a secure erase. Reseating Windows",
+		"  - It is not a factory reset and not a secure erase. Resealing Windows",
 		"    with Sysprep leaves existing files and accounts on the disk. Wipe",
 		"    the disk separately if the data must be gone.",
 		"  - It does not remove accounts or delete personal files, and it does",

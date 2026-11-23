@@ -42,7 +42,7 @@ with the checks and warnings that prevent costly mistakes.
 
 ## What it does not do
 
-- It is **not a factory reset and not a secure erase**. Reseating with
+- It is **not a factory reset and not a secure erase**. Resealing with
   Sysprep leaves existing accounts, files, and traces on the disk. If the
   laptop's data must be gone, wipe the disk separately before selling it.
 - It does not remove accounts or delete personal files. It points them out
