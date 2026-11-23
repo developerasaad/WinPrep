@@ -77,7 +77,7 @@ jobs:
       - name: Build winprep.exe
         run: |
           go build -trimpath -o winprep.exe ./cmd/winprep
-          "$PWD\winprep.exe" version
+          .\winprep.exe version
 
       # The integration tests in tests/windows run against the real
       # installation: registry reads, token inspection, process listing, and
