@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  release:
+    name: Build, verify, and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate the release tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Tag $tag is not a semantic version (expected vMAJOR.MINOR.PATCH[-prerelease])."
+            exit 1
+          fi
+
+      - name: Verify the tag matches the application version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          app_version=$(grep -oP '(?<=^const Version = ")[^"]+' internal/app/version.go)
+          if [ "$tag" != "$app_version" ]; then
+            echo "Tag v$tag does not match internal/app/version.go Version \"$app_version\"."
+            echo "Bump the version constant before tagging."
+            exit 1
+          fi
+
+      - name: Check formatting and vet
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+
+      - name: Build the Windows executable
+        run: |
+          mkdir -p dist/stage
+          commit=$(git rev-parse --short HEAD)
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X github.com/developerasaad/winprep/internal/app.BuildCommit=$commit" -o dist/stage/winprep.exe ./cmd/winprep
+          file dist/stage/winprep.exe
+
+      - name: Package the release archive
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cp LICENSE dist/stage/
+          cp README.md dist/stage/
+          (cd dist/stage && zip -r "../WinPrep-v${version}-windows-amd64.zip" winprep.exe LICENSE README.md)
+          (cd dist && sha256sum "WinPrep-v${version}-windows-amd64.zip" > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/WinPrep-v*-windows-amd64.zip
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          prerelease_flag=""
+          case "$version" in
+            *-*) prerelease_flag="--prerelease" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            --title "WinPrep v${version}" \
+            --notes-file .github/release-notes/v${version}.md \
+            --verify-tag \
+            $prerelease_flag \
+            "dist/WinPrep-v${version}-windows-amd64.zip" \
+            "dist/SHA256SUMS.txt"
+
+      - name: Upload the archive as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-archive
+          path: |
+            dist/WinPrep-v*-windows-amd64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

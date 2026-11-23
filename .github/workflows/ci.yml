@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and unit test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test -race -count=1 ./...
+
+      - name: Build (linux)
+        run: go build ./...
+
+      - name: Cross-compile for Windows
+        run: |
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/winprep.exe ./cmd/winprep
+          file dist/winprep.exe
+
+      - name: Upload the Windows executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: winprep-windows-amd64
+          path: dist/winprep.exe
+          if-no-files-found: error
+
+  windows:
+    name: Windows tests and smoke run
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The unit tests use fakes only, so they also run on Windows; this
+      # catches GOOS-specific issues in the shared code.
+      - name: Unit tests
+        run: go test -count=1 ./...
+
+      - name: Build winprep.exe
+        run: |
+          go build -trimpath -o winprep.exe ./cmd/winprep
+          "$PWD\winprep.exe" version
+
+      # The integration tests in tests/windows run against the real
+      # installation: registry reads, token inspection, process listing, and
+      # end-to-end runs of the executable. They are read-only and never
+      # invoke Sysprep.
+      - name: Windows integration tests
+        env:
+          WINPREP_EXE: ${{ github.workspace }}\winprep.exe
+        run: go test -count=1 -v ./tests/...
+
+      - name: Publish environment details on failure
+        if: failure()
+        run: |
+          go env
+          [System.Environment]::OSVersion.VersionString
+        shell: pwsh
