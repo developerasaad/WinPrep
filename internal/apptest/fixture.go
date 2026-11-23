@@ -5,6 +5,8 @@ package apptest
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	"github.com/developerasaad/winprep/internal/app"
 	"github.com/developerasaad/winprep/internal/artifacts"
@@ -76,6 +78,19 @@ type Fixture struct {
 // New returns a fixture whose machine is a plausible Audit Mode laptop:
 // Windows 11 Pro, elevated built-in Administrator, all checks green.
 func New(dataDir string) *Fixture {
+	// The profiles root must be a controlled empty directory, never the real
+	// C:\Users. The handover inspection globs it on the live filesystem, and a
+	// real Windows machine always has extra folders there (the GitHub runner,
+	// for instance, carries a runneradmin profile), which would flip the
+	// preflight verdict from Ready to "requires attention" and make the
+	// presentation tests fail only on Windows.
+	usersDir := filepath.Join(dataDir, "profiles-root")
+	if err := os.MkdirAll(usersDir, 0o755); err != nil {
+		// dataDir comes from t.TempDir(); failing here means the test
+		// environment is broken, not the code under test.
+		panic("apptest: creating the profiles root: " + err.Error())
+	}
+
 	reg := fake.NewRegistry().
 		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
 		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe").
@@ -115,7 +130,7 @@ func New(dataDir string) *Fixture {
 		"powershell.exe", "powercfg.exe",
 		`C:\Windows\System32\Sysprep\Sysprep.exe`,
 		f.Sysprep,
-		`C:\Users`,
+		usersDir,
 	)
 	return f
 }
