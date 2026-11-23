@@ -1,0 +1,21 @@
+# Build output
+/dist/
+*.exe
+*.zip
+SHA256SUMS.txt
+
+# Go test and coverage artifacts
+*.out
+*.test
+coverage.*
+
+# Local development state
+.env
+*.local.*
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

@@ -1,0 +1,14 @@
+# Source and documentation are text with LF endings in the repository;
+# Git's default (core.autocrlf=false on Linux CI) keeps them intact.
+* text=auto eol=lf
+
+# Windows scripts must keep CRLF so cmd.exe parses them correctly.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.exe binary
+*.zip binary
