@@ -29,6 +29,21 @@ func winprepExe(t *testing.T) string {
 	return p
 }
 
+// machineIsInAuditMode reports whether the live machine is in a confirmed
+// Audit Mode session. The smoke tests below assume a normally deployed
+// installation (what a CI runner and a developer machine are). Running them
+// on a real Audit Mode machine would let "clean --yes" perform an actual
+// handover, so they skip instead. These tests deliberately never invoke
+// Sysprep and never modify system state.
+func machineIsInAuditMode(t *testing.T, exe string) bool {
+	t.Helper()
+	out, code := run(t, exe, nil, "persist")
+	if code != 0 {
+		t.Fatalf("reading the machine state failed (exit %d):\n%s", code, out)
+	}
+	return strings.Contains(out, "Audit Mode (confirmed)")
+}
+
 // run executes the exe and returns combined output plus the exit code.
 func run(t *testing.T, exe string, stdin *strings.Reader, args ...string) (string, int) {
 	t.Helper()
@@ -89,6 +104,9 @@ func TestUnknownCommandExitsWithUsageCode(t *testing.T) {
 
 func TestCleanDryRunOnDeployedMachineIsRefused(t *testing.T) {
 	exe := winprepExe(t)
+	if machineIsInAuditMode(t, exe) {
+		t.Skip("this machine is in Audit Mode; the deployed-machine expectation does not apply (and the test refuses to run clean here)")
+	}
 	out, code := run(t, exe, nil, "clean", "--dry-run")
 	if code != 0 {
 		t.Fatalf("dry run is an inspection and exits 0 even when blocked; exit = %d, output:\n%s", code, out)
@@ -109,8 +127,12 @@ func TestCleanDryRunOnDeployedMachineIsRefused(t *testing.T) {
 
 func TestCleanWithoutConfirmationDoesNothing(t *testing.T) {
 	exe := winprepExe(t)
-	// The machine is not in Audit Mode, so the blocked verdict stops the
-	// procedure before any prompt or confirmation shortcut matters.
+	// On a deployed machine the blocked verdict stops the procedure before
+	// any prompt or confirmation shortcut matters. On an Audit Mode machine
+	// this test would perform a real handover, so it refuses to run there.
+	if machineIsInAuditMode(t, exe) {
+		t.Skip("this machine is in Audit Mode; refusing to run clean --yes outside a disposable test machine")
+	}
 	out, code := run(t, exe, nil, "clean", "--yes")
 	if code != 1 {
 		t.Errorf("exit = %d, want 1 for a blocked handover", code)
@@ -120,6 +142,37 @@ func TestCleanWithoutConfirmationDoesNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "Starting Sysprep") {
 		t.Error("a blocked machine must never start Sysprep, even with --yes")
+	}
+}
+
+func TestPersistCommandRunsReadOnly(t *testing.T) {
+	exe := winprepExe(t)
+	out, code := run(t, exe, nil, "persist")
+	if code != 0 {
+		t.Errorf("exit = %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "Setup state:") {
+		t.Errorf("persist output should report the setup state:\n%s", out)
+	}
+	if !strings.Contains(out, "No system changes were made") {
+		t.Errorf("persist output must state that nothing was changed:\n%s", out)
+	}
+}
+
+func TestSignalsCommandRunsReadOnly(t *testing.T) {
+	exe := winprepExe(t)
+	out, code := run(t, exe, nil, "signals")
+	if code != 0 {
+		t.Errorf("exit = %d, output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "WinPrep setup-state report") {
+		t.Errorf("signals output should carry the report header:\n%s", out)
+	}
+	if !strings.Contains(out, "ImageState") {
+		t.Errorf("signals output should show the ImageState value:\n%s", out)
+	}
+	if !strings.Contains(out, "No changes were made") {
+		t.Errorf("signals output must state that nothing was changed:\n%s", out)
 	}
 }
 

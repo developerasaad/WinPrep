@@ -66,6 +66,9 @@ func (m *Model) renderMenu() string {
 		if m.loading {
 			b.WriteString(styleDim.Render("Status: checking..."))
 			b.WriteString("\n")
+		} else {
+			b.WriteString(styleDim.Render("Status: not checked"))
+			b.WriteString("\n")
 		}
 	} else if m.headerErr != nil {
 		b.WriteString(styleError.Render("Status: could not read (" + m.headerErr.Error() + ")"))
@@ -145,10 +148,34 @@ func (m *Model) renderScreen() string {
 	case screenHandover:
 		switch m.phase {
 		case hoConfirm:
+			// The inspection and plan are rendered again above the warning:
+			// the alt screen has no scrollback, and the operator must be
+			// able to read what is about to be removed while deciding.
+			lines := m.confirmationContext()
+			top, bottom := m.scroll, m.scroll+m.viewportHeight()
+			if top > len(lines) {
+				top = len(lines)
+			}
+			if bottom > len(lines) {
+				bottom = len(lines)
+			}
+			for _, l := range lines[top:bottom] {
+				b.WriteString(l)
+				b.WriteString("\n")
+			}
+			if bottom < len(lines) {
+				b.WriteString(styleDim.Render("... more above (UP/DOWN to scroll) ...\n"))
+			}
 			b.WriteString(m.renderConfirm())
 		}
 	}
 	return b.String()
+}
+
+// confirmationContext is the review content (inspection plus cleanup plan)
+// re-rendered on the confirmation screen.
+func (m *Model) confirmationContext() []string {
+	return wrapLines(renderSessionReview(m.session, m.sessionErr), m.wrapWidth())
 }
 
 func (m *Model) screenTitle() string {
@@ -219,7 +246,7 @@ func (m *Model) footerHint() string {
 			}
 			return "ENTER Continue   UP/DOWN Scroll   ESC Back"
 		case hoConfirm:
-			return "LEFT/RIGHT Choose   ENTER Select   Y/N Shortcut"
+			return "UP/DOWN Scroll plan   LEFT/RIGHT Choose   ENTER Select   Y/N Shortcut"
 		case hoExecute:
 			return "Cleaning and resealing - do not turn off the laptop"
 		default:
@@ -326,7 +353,8 @@ func helpText() string {
 		"  CTRL+C    Exit (blocked while Sysprep runs)",
 		"",
 		"The same operations are available as commands (winprep persist,",
-		"winprep clean) for scripted use.",
+		"winprep clean) for scripted use; winprep signals prints the",
+		"setup-state report used for troubleshooting.",
 	}, "\n")
 }
 

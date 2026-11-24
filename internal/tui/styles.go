@@ -26,7 +26,6 @@ const contentWidth = 76
 var (
 	styleTitle = lipgloss.NewStyle().Bold(true)
 	styleDim   = lipgloss.NewStyle().Faint(true)
-	styleLabel = lipgloss.NewStyle().Faint(true)
 
 	styleSelected = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	styleNormal   = lipgloss.NewStyle()

@@ -5,8 +5,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/developerasaad/winprep/internal/app"
 	"github.com/developerasaad/winprep/internal/cli"
@@ -33,12 +36,18 @@ func main() {
 	// message and the CLI instead of a broken menu.
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		fmt.Fprintln(os.Stderr, "WinPrep needs an interactive terminal for its menu.")
-		fmt.Fprintln(os.Stderr, "Use the commands instead: winprep persist or winprep clean.")
+		fmt.Fprintln(os.Stderr, "Use the commands instead: winprep persist, winprep clean, winprep signals.")
 		fmt.Fprintln(os.Stderr, "Run \"winprep help\" for details.")
 		os.Exit(cli.ExitUsage)
 	}
 
 	if err := tui.Run(a, os.Stdin, os.Stdout); err != nil {
+		if errors.Is(err, tea.ErrInterrupted) {
+			// The operator quit with Ctrl+C; the program already restored
+			// the terminal. Exiting beats dropping into a second
+			// interactive interface.
+			os.Exit(cli.ExitOK)
+		}
 		// The console is interactive but cannot host the full-screen
 		// interface (unusual terminal, restricted escape-sequence support).
 		// The numbered fallback menu covers that case.
