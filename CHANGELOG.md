@@ -6,6 +6,87 @@ uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.0-alpha.2] - 2026-11-24
+
+Audit Mode detection did not work on real Windows, which blocked both
+operations on every genuine Audit Mode machine. This release fixes the
+detector and hardens the handover paths a review of the detection change
+touched.
+
+### Fixed
+
+- Audit Mode detection now reads the setup state from the value real
+  Windows installations write: `ImageState` under
+  `HKLM\SOFTWARE\...\Setup\State`. The previous build queried `StateName`, a
+  value name that appears in the prose of Microsoft's "Windows Setup States"
+  page but has never been observed on a real installation, so every real
+  machine evaluated to "setup state unknown".
+- Detection no longer requires `HKLM\SYSTEM\Setup\CmdLine` to equal
+  `audit.exe`. Field evidence (OEM deployment logs, support threads,
+  production deployment tooling) shows that value holds whatever the setup
+  engine queued before logon - `oobe\windeploy.exe`, `SetupComplete.cmd`,
+  or nothing - never "audit.exe". It is now collected as a reported
+  observation only. A confirmed Audit Mode session instead requires the
+  setup state (`IMAGE_STATE_UNDEPLOYABLE` or a documented
+  `IMAGE_STATE_*_RESEAL_TO_AUDIT` value), the audit boot flag
+  (`HKLM\SYSTEM\Setup\Status\AuditBoot`, with the Windows 11-observed
+  `AuditBootVolatile` sibling), no live OOBE, and the built-in
+  Administrator session Microsoft documents for Audit Mode. The State.ini
+  file and the documented `StateName` value are read as fallbacks; a
+  disagreement between sources is reported as a conflict rather than
+  guessed away.
+- The handover revalidation fails closed when the running-process list
+  cannot be read, instead of proceeding as if no Sysprep process existed.
+- The full preflight evaluation is re-run after the operator confirms, so a
+  blocker that appeared in the meantime (a new local account, a pending
+  servicing restart, an active Sysprep operation) stops the handover before
+  anything is deleted.
+- The executor re-checks every approved directory root with `Lstat` right
+  before enumerating it and refuses to traverse a root that became a
+  symlink, junction, or other reparse point after planning. Previously only
+  the final path components were checked, so a root swapped for a junction
+  mid-run could redirect deletions outside the approved scope.
+- A cleanup target directory that vanished between planning and verification
+  no longer marks the run incomplete; the goal state (nothing left in it) is
+  already met.
+- A failed Sysprep path check (unset `WINDIR`, access denied) is now reported
+  as "could not verify" instead of a false "Sysprep.exe is not present".
+- Interrupt shielding during the approved handover no longer destroys other
+  components' interrupt handlers (the TUI's) when it ends.
+- The TUI status line no longer stays empty after the startup check is
+  cancelled, stale notices no longer survive into the result and help
+  screens, and Ctrl+C at the full-screen interface exits instead of dropping
+  into the fallback menu.
+- The `--dry-run` claim "no changes were made" is now literally true:
+  running WinPrep no longer creates `%ProgramData%\WinPrep` on inspection
+  alone (the directory is created when something is actually written).
+
+### Changed
+
+- The operation lock is released when a handover attempt ends without an
+  initiated reseal, so a failed cleanup can be retried from the same window
+  without restarting WinPrep. After an initiated reseal the lock stays held:
+  the machine is shutting down.
+- The cleanup executes the revalidated plan over the same approved
+  locations, so demonstration data that appeared inside an approved location
+  after the operator confirmed is covered by that confirmation instead of
+  being silently left behind.
+- The TUI confirmation screen now shows the inspection and cleanup plan
+  above the warning (the alt screen has no scrollback), and the plan can be
+  scrolled there with UP/DOWN.
+
+### Added
+
+- `winprep signals`, a read-only troubleshooting command that prints every
+  setup-state signal the detector collected, where each value came from, and
+  how the deployment mode was evaluated. It is the evidence to attach when
+  a genuine Audit Mode session is rejected; docs/troubleshooting.md explains
+  the procedure.
+- Windows integration tests assert that `ImageState` is present on a real
+  installation - the regression guard for the value-name defect - and the
+  smoke tests skip themselves on a machine that reports a confirmed Audit
+  Mode session rather than risk a real `clean --yes` handover.
+
 ## [0.2.0-alpha.1] - 2026-11-24
 
 The product narrowed to its two core operations, and the handover grew the
@@ -92,6 +173,7 @@ executed.
   runner, GitHub Actions CI, and a release workflow with checksums and
   build provenance attestation.
 
-[Unreleased]: https://github.com/developerasaad/WinPrep/compare/v0.2.0-alpha.1...HEAD
+[Unreleased]: https://github.com/developerasaad/WinPrep/compare/v0.2.0-alpha.2...HEAD
+[0.2.0-alpha.2]: https://github.com/developerasaad/WinPrep/compare/v0.2.0-alpha.1...v0.2.0-alpha.2
 [0.2.0-alpha.1]: https://github.com/developerasaad/WinPrep/compare/v0.1.0-alpha.1...v0.2.0-alpha.1
 [0.1.0-alpha.1]: https://github.com/developerasaad/WinPrep/releases/tag/v0.1.0-alpha.1

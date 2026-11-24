@@ -34,10 +34,16 @@ jobs:
             exit 1
           fi
 
-      - name: go vet
+      - name: go vet (linux)
         run: go vet ./...
 
-      - name: Unit tests
+      # The windows-tagged sources (internal/windows, app_windows, the
+      # integration tests) are invisible to a linux vet run, so they are
+      # vetted through a cross-compile vet pass here.
+      - name: go vet (windows target)
+        run: GOOS=windows GOARCH=amd64 go vet ./...
+
+      - name: Unit tests (race)
         run: go test -race -count=1 ./...
 
       - name: Build (linux)
@@ -69,24 +75,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The unit tests use fakes only, so they also run on Windows; this
-      # catches GOOS-specific issues in the shared code.
-      - name: Unit tests
-        run: go test -count=1 ./...
-
       - name: Build winprep.exe
         run: |
           go build -trimpath -o winprep.exe ./cmd/winprep
           .\winprep.exe version
 
-      # The integration tests in tests/windows run against the real
-      # installation: registry reads, token inspection, process listing, and
-      # end-to-end runs of the executable. They are read-only and never
-      # invoke Sysprep.
-      - name: Windows integration tests
+      # One pass over the whole tree: the unit tests (fakes only) plus the
+      # integration tests in tests/windows, which run against the real
+      # installation - registry reads, token inspection, process listing, and
+      # end-to-end runs of the built executable. WINPREP_EXE is set so the
+      # smoke tests use the exe built above instead of compiling their own.
+      # All of it is read-only: none of it invokes Sysprep or modifies system
+      # state, and the smoke tests skip themselves if the machine reports a
+      # confirmed Audit Mode session.
+      - name: Tests (unit and integration)
         env:
           WINPREP_EXE: ${{ github.workspace }}\winprep.exe
-        run: go test -count=1 -v ./tests/...
+        run: go test -count=1 -v ./...
 
       - name: Publish environment details on failure
         if: failure()

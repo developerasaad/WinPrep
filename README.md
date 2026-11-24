@@ -85,7 +85,7 @@ general security updates for it.
 The menu opens immediately:
 
 ```
-WinPrep                                         v0.2.0
+WinPrep                                  v0.2.0-alpha.2
 Windows preparation
 
 Current mode: Audit Mode confirmed
@@ -108,6 +108,26 @@ If the console cannot host the full-screen interface, WinPrep falls back to
 a plain numbered menu. Without a terminal at all it prints guidance and the
 equivalent commands.
 
+## How Audit Mode detection works
+
+WinPrep never trusts a single registry value. It reads the Windows setup
+state (`ImageState` under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, with
+`%WINDIR%\Setup\State\State.ini` as a cross-check), the audit boot flag
+(`HKLM\SYSTEM\Setup\Status\AuditBoot`), the OOBE indicator
+(`HKLM\SYSTEM\Setup\OOBEInProgress`), and the session user's SID, because
+Microsoft documents that Audit Mode signs in as the built-in Administrator.
+Audit Mode is confirmed only when those signals agree; conflicting or
+missing signals produce an "uncertain" or "unknown" state, and both
+operations refuse to act on it. The reasons are always reported: run
+`winprep signals` to see every raw value and how it was evaluated.
+
+One caveat worth knowing: `AuditBoot` is confirmed by field evidence on
+Windows 7-10 audit machines, but Microsoft does not officially document it.
+If a future Windows build stops writing it, a machine that is genuinely in
+Audit Mode would be reported as uncertain rather than misdetected - and the
+`winprep signals` output is the evidence to attach to a bug report.
+
 ## Command-line usage
 
 ```
@@ -115,6 +135,7 @@ winprep                    Interactive menu
 winprep persist            Verify the machine is ready for demonstrations
 winprep clean              Clean the approved data and prepare for handover
 winprep clean --dry-run    Inspect and preview the cleanup; change nothing
+winprep signals            Print the setup-state signals this machine reports
 winprep help               Full help
 winprep version            Version and build target
 ```
@@ -161,9 +182,11 @@ See [docs/safety.md](docs/safety.md) for the full discussion.
 ## Troubleshooting
 
 Common problems - handovers blocked by pending restarts, extra accounts, a
-running browser, Sysprep failing on provisioned Store apps - are covered in
-[docs/troubleshooting.md](docs/troubleshooting.md), along with the Sysprep
-log locations under `%WINDIR%\System32\Sysprep\Panther`.
+running browser, Sysprep failing on provisioned Store apps, and machines
+whose Audit Mode session is not recognized - are covered in
+[docs/troubleshooting.md](docs/troubleshooting.md), along with the
+`winprep signals` evidence report and the Sysprep log locations under
+`%WINDIR%\System32\Sysprep\Panther`.
 
 ## Contributing
 

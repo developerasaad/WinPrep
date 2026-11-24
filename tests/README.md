@@ -28,8 +28,11 @@ Tagged `//go:build windows`; they run only on a real Windows installation:
 the GitHub Actions Windows runner during CI, or a local Windows machine with
 a Go toolchain. They exercise the real registry, token, account-enumeration,
 and process plumbing (read-only) and run the built executable end-to-end:
-version and help output, dry-run refusal on a deployed machine, execution
-from a path with spaces, and the no-terminal guidance path.
+version and help output, `persist` and `signals` output, dry-run refusal on
+a deployed machine, execution from a path with spaces, and the no-terminal
+guidance path. The real-machine audit test asserts that `ImageState` is
+read - the regression guard for the v0.2.0-alpha.1 detector, which queried
+a value name (`StateName`) that real Windows never writes.
 
 CI points `WINPREP_EXE` at the executable it built. Without that variable
 the tests build their own copy, so `go test ./...` on a Windows development
@@ -39,7 +42,10 @@ These tests deliberately never invoke Sysprep, reboot, or modify system
 state. A GitHub-hosted runner is a disposable VM, but it is a normally
 deployed Windows installation (Server edition), which makes it a useful
 honesty check: WinPrep must recognize it as unsuitable for the handover
-workflow and refuse.
+workflow and refuse. The smoke tests that assume a deployed machine also
+skip themselves when the machine reports a confirmed Audit Mode session, so
+running the suite on a real preparation machine can never trigger a
+disposable `clean --yes` handover by accident.
 
 ## Windows lifecycle tests (manual)
 
@@ -50,5 +56,5 @@ disposable Windows installation with snapshots and cannot be automated on
 ordinary hosted runners without violating WinPrep's own safety rules.
 
 The procedure and a results checklist live in `docs/development.md`
-(Lifecycle testing). As of v0.2.0-alpha.1 this layer has not been executed;
+(Lifecycle testing). As of v0.2.0-alpha.2 this layer has not been executed;
 the prerelease label reflects exactly that.

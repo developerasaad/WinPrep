@@ -101,7 +101,7 @@ window open (attention, then the execution gate), declining at the
 confirmation (nothing modified), interrupted inspection (ESC), and
 narrow/odd terminal sizes.
 
-As of v0.2.0-alpha.1 this list has not been executed on a reference
+As of v0.2.0-alpha.2 this list has not been executed on a reference
 machine; the prerelease label reflects that. Record actual results here
 when the pass happens - observed behavior, not expectations.
 

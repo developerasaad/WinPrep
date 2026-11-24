@@ -50,11 +50,19 @@ for that job.
 
 ## Detection honesty
 
-Audit Mode detection requires multiple consistent signals
-(IMAGE_STATE_UNDEPLOYABLE + audit.exe + built-in Administrator). Do not
-weaken it to "make detection work" on some machine; uncertain states must
-stay uncertain and must disable state-changing operations. Never treat a
-single registry value as proof.
+Audit Mode detection reads the documented Windows setup state
+(`ImageState`, with the State.ini file and the documented-but-unobserved
+`StateName` value as fallbacks), the audit boot flag
+(`HKLM\SYSTEM\Setup\Status\AuditBoot`, field-observed rather than
+officially documented), the OOBE indicator, and the session SID, and
+confirms Audit Mode only when they agree. Do not weaken it to "make
+detection work" on some machine; uncertain states must stay uncertain and
+must disable state-changing operations. Never treat a single registry value
+as proof, and never gate detection on `HKLM\SYSTEM\Setup\CmdLine` - real
+systems use that value for unrelated pre-logon commands, so it is recorded
+as an observation only. A machine rejected despite a genuine Audit Mode
+session is a bug to be reported with `winprep signals` output, not a reason
+to relax the rules.
 
 ## Testing
 

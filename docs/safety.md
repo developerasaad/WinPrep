@@ -58,8 +58,10 @@ destroys the prepared installation.
   leaving Windows in a half-prepared state. WinPrep never creates such a
   task; it explains the window instead.
 - **"The built-in Administrator proves Audit Mode."** The account exists on
-  every installation. WinPrep's detection requires multiple consistent
-  signals (setup state, setup command line, session SID) before it calls a
+  every installation, and being signed in as it only corroborates other
+  signals. WinPrep's detection requires multiple consistent signals (the
+  ImageState setup state, the audit boot flag under
+  `HKLM\SYSTEM\Setup\Status`, and the session SID) before it calls a
   machine Audit Mode, and treats conflicts as "do not act".
 - **"Sysprep exited cleanly, so first boot works."** WinPrep reports that
   the reseal was initiated, not that the buyer's experience is verified.

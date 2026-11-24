@@ -42,6 +42,16 @@ jobs:
             exit 1
           fi
 
+      # Fail before any build work if the notes file is missing; otherwise
+      # gh release create would fail only after packaging and attestation.
+      - name: Verify the release notes exist
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ ! -f ".github/release-notes/v${version}.md" ]; then
+            echo "Missing .github/release-notes/v${version}.md - write the release notes before tagging."
+            exit 1
+          fi
+
       - name: Check formatting and vet
         run: |
           test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
