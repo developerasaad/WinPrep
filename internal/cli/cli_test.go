@@ -54,7 +54,7 @@ func TestVersion(t *testing.T) {
 			t.Errorf("%s: exit = %d", cmd, code)
 		}
 		s := out.String()
-		if !strings.Contains(s, "winprep 0.1.0") {
+		if !strings.Contains(s, "winprep 0.2.0") {
 			t.Errorf("%s: version output = %q", cmd, s)
 		}
 		if !strings.Contains(s, "linux/amd64") && !strings.Contains(s, "windows/amd64") {

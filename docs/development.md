@@ -20,24 +20,29 @@ internal/cli/       command-line interface
 internal/tui/       interactive terminal interface + fallback menu
 internal/platform/  interfaces and typed models (the seam for all testing)
 internal/platform/fake/  in-memory fakes
-internal/windows/   real Windows implementation (registry, tokens, processes)
+internal/windows/   real Windows implementation (registry, tokens,
+                    processes, SAM accounts, Sysprep monitor, mutex)
 internal/audit/     Audit Mode detection
-internal/status/    "System information"
-internal/persist/   "Prepare for display"
-internal/diagnostics/  "Check this laptop"
-internal/handover/  "Ready for buyer": preflight, cleanup, reseal
+internal/persist/   "Prepare for Display"
+internal/handover/  "Clean & Finish": the operation controller - preflight,
+                    cleanup planning and execution, reseal, outcomes
 internal/artifacts/ managed-artifact manifest
-internal/textfile/  report file writing (UTF-8, CRLF)
-internal/format/    size/duration formatting
+internal/format/    size formatting
 internal/apptest/   full App over fakes, shared by cli/tui tests
 tests/windows/      integration tests, run on real Windows (CI)
 ```
 
 The dependency rule is one-directional: presentation (cli, tui) and domain
-packages (audit, diagnostics, handover, persist, status) import platform
-interfaces; only internal/windows implements them; only app assembles the
-two. If a change needs a domain package to import internal/windows, the
-seam is being bypassed and the change needs a second look.
+packages (audit, handover, persist) import platform interfaces; only
+internal/windows implements them; only app assembles the two. If a change
+needs a domain package to import internal/windows, the seam is being
+bypassed and the change needs a second look.
+
+The handover package owns one controller with a session-shaped API:
+`Begin` (inspect + plan, read-only), `Approve` (record the operator's
+decision), `Execute` (revalidate, clean, verify, reseal). The CLI, the TUI,
+and the fallback menu all drive that sequence; none of them may sequence
+deletions themselves.
 
 ## Building
 
@@ -70,26 +75,33 @@ The full workflow needs a disposable Windows VM with snapshots:
 
 1. Install Windows 10 or 11; reach OOBE.
 2. Press Ctrl+Shift+F3; confirm the machine restarts into Audit Mode.
-3. Run `winprep status` and `winprep persist`; confirm Audit Mode detection
-   and the readiness explanation.
+3. Run `winprep persist`; confirm Audit Mode detection and the readiness
+   explanation.
 4. Restart; confirm the machine is still in Audit Mode.
-5. Run `winprep check`; confirm the report reflects the VM's hardware
-   (disk, no battery or emulated battery, devices).
-6. Run `winprep clean --dry-run`; confirm "handover appears possible" and
-   that nothing changed.
-7. Run `winprep clean`; confirm the confirmation flow, then let Sysprep
-   reseal and shut down.
-8. Power on; confirm Windows first-time setup appears and the OOBE flow
+5. Create demonstration data in the Administrator's Downloads folder, use
+   Edge to browse somewhere, and leave files in the local Temp folder.
+6. Run `winprep clean --dry-run`; confirm the plan lists exactly the
+   created data and that nothing changed.
+7. Create an extra local account; confirm the handover is blocked until it
+   is removed.
+8. Run `winprep clean`; confirm the plan and confirmation flow, then let
+   the cleanup remove the demonstration data and Sysprep reseal and shut
+   down.
+9. Power on; confirm Windows first-time setup appears and the OOBE flow
    completes.
-9. Inspect the disk (mount the image or use a second OS) for leftover
-   `%ProgramData%\WinPrep` artifacts; there should be none after a
-   successful handover.
+10. Inspect the disk (mount the image or use a second OS): the
+    demonstration Downloads contents, Temp files, and Edge data are gone;
+    `%ProgramData%\WinPrep` is gone; Desktop contents and other personal
+    folders are untouched; no WinPrep startup helpers exist anywhere.
 
 Failure cases to cover along the way: `clean` unelevated (blocked), a
 second `persist` run (idempotent), `clean` with a pending reboot (blocked),
-interrupted inspection (ESC), and narrow/odd terminal sizes.
+`clean` with a browser running (blocked), the System Preparation Tool
+window open (attention, then the execution gate), declining at the
+confirmation (nothing modified), interrupted inspection (ESC), and
+narrow/odd terminal sizes.
 
-As of v0.1.0-alpha.1 this list has not been executed on a reference
+As of v0.2.0-alpha.1 this list has not been executed on a reference
 machine; the prerelease label reflects that. Record actual results here
 when the pass happens - observed behavior, not expectations.
 

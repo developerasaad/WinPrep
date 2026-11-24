@@ -13,7 +13,7 @@ The refusal message names the blocking checks. Common causes:
   Prompt with "Run as administrator", and try again.
 - **"Windows has a restart pending"** - Component servicing or Windows
   Update is waiting for a reboot. Restart, let updates finish installing,
-  and run **Ready for buyer** again. Sysprep is likely to fail while
+  and run **Clean & Finish** again. Sysprep is likely to fail while
   servicing operations are pending, so this is a hard block.
 - **"This Windows installation is already deployed"** - The machine is in
   normal use, not Audit Mode. WinPrep will not reseal a deployed
@@ -21,11 +21,23 @@ The refusal message names the blocking checks. Common causes:
   during Windows setup (see [workflow.md](workflow.md)). Re-running Sysprep
   on a machine that has been in normal use is not the supported path and
   can fail in ways that are hard to recover from.
+- **"Additional local accounts exist"** - Accounts survive the reseal and
+  would be handed to the buyer. Remove them in Settings > Accounts (or
+  lusrmgr.msc), let Windows delete their data, and run **Clean & Finish**
+  again. WinPrep never deletes accounts itself.
+- **"Additional user data is present"** - Profile folders or orphaned
+  profile directories remain. Remove them through Windows (System
+  Properties > User Profiles) so Windows cleans them up, then retry.
 - **"The Windows setup state could not be determined"** - The registry
   signals were missing or conflicting. Restart and try again; if it
-  persists, please file a bug report with the output of `winprep status`.
-- **"A Sysprep process is already running"** - Finish or close the existing
-  Sysprep window, then retry.
+  persists, please file a bug report with the inspection output.
+- **"Microsoft Edge / Google Chrome is still running"** - Browsing data
+  cannot be removed while its browser runs. Close it fully - note that
+  Edge's "Startup Boost" feature keeps background processes alive after
+  you close the window - and retry.
+- **"A Sysprep operation appears to be in progress"** - Sysprep's logs were
+  written seconds ago, so an operation is running. Wait for it to finish
+  (the machine may shut down), then retry.
 
 ## Sysprep itself fails
 
@@ -51,6 +63,26 @@ Other things worth checking when Sysprep fails:
   prepared (this is not WinPrep disabling security; it is you deciding what
   runs on a laptop you are preparing for sale).
 
+## The idle System Preparation Tool window
+
+Audit Mode opens the Sysprep window at every sign-in. It can be closed with
+its close button; that does not end Audit Mode. WinPrep reports it as an
+attention item during the inspection and refuses to launch its own Sysprep
+while the window's process exists - close it before the final step of
+**Clean & Finish**. WinPrep never closes or kills it itself, because
+interrupting an active Sysprep operation can leave Windows in a broken
+state, and telling an idle window from a running operation by process name
+alone is not reliable.
+
+## The cleanup did not complete
+
+When a removal fails - usually because a running program holds a file open,
+or permissions changed - WinPrep reports the failing paths, does not start
+the reseal, and tells you to retry. The cleanup is safe to re-run: it
+removes what remains and treats already-absent files as done. Close the
+program holding the files (the report usually names the browser or folder),
+then run **Clean & Finish** again and re-confirm the new plan.
+
 ## The laptop boots to a "Sysprep is validating your installation" loop
 
 This happens when Audit Mode was left in an inconsistent state - most
@@ -60,32 +92,6 @@ WinPrep blocks a second Sysprep while one is running, refuses to run
 Sysprep during pending servicing, and never kills a running Sysprep
 process. If it happens anyway, the Panther logs tell you which phase
 failed.
-
-## Battery information is missing
-
-`winprep check` explains per-field why a value is unavailable instead of
-guessing:
-
-- **"No battery was detected"** - The machine may not have a battery, or
-  Windows cannot see it (a disconnected or failed battery often reports
-  this way on laptops assembled for parts).
-- **"did not report its design capacity"** - The battery firmware does not
-  expose the data Windows needs. Health cannot be calculated, and WinPrep
-  will not display a made-up percentage.
-- The battery report (`winprep check --battery-report`, elevated) generates
-  Windows' own HTML report with the raw data.
-
-A battery that reports data can still be near failure; the health
-percentage is an estimate from the battery's own counters, not a guarantee.
-
-## Storage health is missing or "media type not reported"
-
-Some storage drivers do not implement the queries Windows uses
-(`Get-PhysicalDisk`). WinPrep falls back to a basic disk listing and marks
-the health line unavailable rather than showing nothing. A drive that
-reports "Healthy" is reporting its own opinion; a drive that reports
-"Warning" or "Unhealthy" deserves a closer look with the manufacturer's
-tool before the sale.
 
 ## The interactive menu does not start
 
@@ -98,16 +104,8 @@ tool before the sale.
   only; switch the console font to Consolas or another TrueType font if
   spacing looks wrong.
 
-## winprep check shows "Some information was unavailable"
-
-This is the honest outcome when Windows cannot answer a query - most often
-the hardware query on locked-down systems. The notes next to each field say
-which. It is not evidence of a fault, and a fully answered report is not
-proof of health. The check complements a physical inspection; it does not
-replace one.
-
 ## Something else
 
-Open an issue with the output of `winprep status` and, for handover
-problems, the relevant lines from the Sysprep logs. The issue template
-asks for exactly that.
+Open an issue with the inspection output (`winprep clean --dry-run` is a
+safe way to capture it) and, for handover problems, the relevant lines from
+the Sysprep logs. The issue template asks for exactly that.

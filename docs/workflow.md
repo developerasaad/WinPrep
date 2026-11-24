@@ -57,29 +57,42 @@ without leaving Audit Mode. Two things are worth knowing:
 
 ## Phase 3: the sale
 
-1. Run **Check this laptop** and review the report: storage health, battery
-   health, problem devices, activation. Deal with anything it surfaces.
-2. Remove whatever should not reach the buyer: accounts you created, files,
-   tools. WinPrep lists extra accounts and profile folders it finds during
-   the handover inspection, but it never deletes them - that judgment is
-   yours.
-3. Run **Ready for buyer**. WinPrep inspects the machine and shows the
-   result:
-   - **Ready** - all checks passed.
-   - **Requires attention** - for example, extra local accounts exist. You
-     can proceed after acknowledging them.
-   - **Blocked** - for example, Windows has a restart pending, or the
+1. Remove any accounts you created while preparing the laptop (Settings >
+   Accounts). Accounts survive the reseal, so WinPrep refuses the handover
+   until only the built-in Administrator remains - and it never deletes
+   accounts itself. Let Windows remove the account's files when it offers.
+2. Close any open browsers and the System Preparation Tool window if it is
+   on screen. Browsing data cannot be cleaned while its browser runs, and
+   WinPrep never launches Sysprep while another Sysprep process exists.
+3. Run **Clean & Finish**. WinPrep inspects the machine and builds the
+   cleanup plan from the demonstration profile - the built-in
+   Administrator's Downloads contents, the profile's temporary files, and
+   the browsing data of Edge and Chrome - and shows everything:
+   - **Ready** - all checks passed, the plan lists what will be removed.
+   - **Requires attention** - for example, the idle System Preparation Tool
+     window is open, or file renames are pending. You can proceed after
+     acknowledging the items.
+   - **Blocked** - for example, Windows has a restart pending, extra
+     accounts or profiles remain, a browser is still running, or the
      machine is not in a confirmed Audit Mode session. The handover is
      refused until the issue is resolved. There is no override flag.
-4. After confirmation, WinPrep removes its own recorded artifacts (v0.1
-   has none on a normal run - the mechanism exists so future versions can
-   extend safely) and runs
+4. Review the plan. Folders the cleanup will not touch (Desktop, Documents,
+   Pictures, and similar) are listed for your review; if a customer left
+   something there that the buyer should not see, remove it yourself.
+5. Confirm once. WinPrep re-checks the machine, removes exactly the approved
+   data, verifies the results, and runs
    `Sysprep.exe /oobe /shutdown`.
-   The laptop reseals and shuts down.
-5. **Switch the laptop on once yourself.** Confirm that Windows first-time
+   The laptop reseals and shuts down. If any removal fails, the reseal does
+   not happen; close whatever holds the files and run Clean & Finish again -
+   it safely retries what remains.
+6. **Switch the laptop on once yourself.** Confirm that Windows first-time
    setup appears and works up to the point of account creation. WinPrep
    reports that Sysprep ran and exited cleanly; only a human can confirm
    the buyer's actual first boot experience.
+
+A dry run - `winprep clean --dry-run` - shows the inspection and the plan
+without changing anything. It is the safe way to see what a handover would
+do on a given machine.
 
 ## Why no /generalize
 

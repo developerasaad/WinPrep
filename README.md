@@ -1,10 +1,10 @@
 # WinPrep
 
 WinPrep is a portable Windows utility for laptop refurbishers and second-hand
-computer sellers. It helps prepare a Windows installation for resale: verify
-the machine is ready for repeated customer demonstrations, check its health
-before a sale, and reseal Windows into first-time setup when the buyer takes
-it.
+computer sellers. It does one job: keep a freshly installed Windows machine
+usable in Audit Mode for repeated customer demonstrations, then clean the
+demonstration data and hand the machine over through Windows' own
+first-time-setup flow when it sells.
 
 It is a single `winprep.exe` with no installation, no runtime dependencies,
 and no network access. Run it from Command Prompt, or double-click it and
@@ -21,33 +21,32 @@ restarts, and a Sysprep call returns it to first-time setup when it sells.
 WinPrep wraps that workflow in a tool a non-specialist can operate safely,
 with the checks and warnings that prevent costly mistakes.
 
-## What it does
+## The two operations
 
-- **Prepare for display** (`winprep persist`) - verifies the machine is in a
+- **Prepare for Display** (`winprep persist`) - verifies the machine is in a
   supported Audit Mode session and explains what that means for
   demonstrations. It makes no system changes: Audit Mode already survives
-  restarts and shutdowns by design.
-- **Check this laptop** (`winprep check`) - read-only diagnostics: computer
-  details, storage devices with reported health, battery capacity and
-  estimated health, Device Manager problem devices, and activation state.
-  Reports can be exported; a Windows battery report can be generated.
-- **Ready for buyer** (`winprep clean`) - the handover: a preflight safety
-  inspection, removal of WinPrep's own recorded changes, a deliberate
-  confirmation step, then `Sysprep.exe /oobe /shutdown` to reseal Windows
-  into first-time setup. `winprep clean --dry-run` performs the full
-  inspection without changing anything.
-- **System information** (`winprep status`) - a read-only summary of the
-  Windows installation, the current user and privileges, and the setup
-  state, including Audit Mode detection.
+  restarts and shutdowns by design, so there is nothing to configure and the
+  step is safe to repeat.
+- **Clean & Finish** (`winprep clean`) - the handover. WinPrep inspects the
+  machine, builds an explicit cleanup plan from what customers actually used
+  (the Downloads contents of the demonstration account, its temporary files,
+  the browsing data of Edge and Chrome), shows the plan, and asks for one
+  deliberate confirmation. Only then does it remove the approved data and
+  run `Sysprep.exe /oobe /shutdown`, which reseals Windows into first-time
+  setup and shuts the laptop down. `winprep clean --dry-run` shows the
+  inspection and the plan without changing anything.
 
 ## What it does not do
 
 - It is **not a factory reset and not a secure erase**. Resealing with
-  Sysprep leaves existing accounts, files, and traces on the disk. If the
-  laptop's data must be gone, wipe the disk separately before selling it.
-- It does not remove accounts or delete personal files. It points them out
-  before a handover; removing them is the operator's decision.
-- It does not install or update drivers, and it does not touch activation.
+  Sysprep keeps the Windows installation, its drivers, and its programs, and
+  removes nothing outside the approved cleanup scope. If the laptop's disk
+  must be wiped, do that separately before selling it.
+- It never deletes user accounts, and it never touches Desktop, Documents,
+  Pictures, or other personal folders - it reports them so the operator can
+  review what the buyer would receive.
+- It does not install or update drivers, and it does not manage activation.
 - It never disables Windows security features (Defender, firewall, UAC,
   BitLocker, SmartScreen).
 - It contains no telemetry, no update checks, and no advertising. It works
@@ -62,8 +61,8 @@ general security updates for it.
 ## Requirements
 
 - A Windows 10/11 x64 machine.
-- An administrator console for `Ready for buyer` and for battery reports.
-  Read-only commands work unelevated.
+- An administrator console for Clean & Finish. Read-only commands work
+  unelevated.
 - Audit Mode for the full workflow (see [docs/workflow.md](docs/workflow.md)).
   WinPrep detects the machine's actual state and refuses state-changing
   operations outside the supported workflow.
@@ -73,8 +72,11 @@ general security updates for it.
 1. Download `WinPrep-vX.Y.Z-windows-amd64.zip` from
    [Releases](https://github.com/developerasaad/WinPrep/releases) and verify
    it against `SHA256SUMS.txt`.
-2. Extract `winprep.exe` anywhere, for example `C:\Tools`.
-3. Open Command Prompt (as administrator for the full workflow) and run:
+2. Extract `winprep.exe` to a USB stick or a folder that is not part of the
+   demonstration data, for example `C:\Tools`. (Running it from the
+   demonstration account's Downloads folder is refused by the cleanup plan,
+   because deleting the running program fails midway.)
+3. Open Command Prompt as administrator and run:
 
    ```
    C:\Tools\winprep.exe
@@ -83,16 +85,14 @@ general security updates for it.
 The menu opens immediately:
 
 ```
-WinPrep                                         v0.1.0
-Windows laptop preparation
+WinPrep                                         v0.2.0
+Windows preparation
 
-System:  Windows 11 Pro
-Mode:    Audit Mode confirmed
+Current mode: Audit Mode confirmed
+Status: Ready for display
 
-  > Prepare for display
-    Check this laptop
-    Ready for buyer
-    System information
+  > Prepare for Display
+    Clean & Finish
     Help
     Exit
 
@@ -112,20 +112,16 @@ equivalent commands.
 
 ```
 winprep                    Interactive menu
-winprep status             Read-only system summary
 winprep persist            Verify the machine is ready for demonstrations
-winprep check              Read-only diagnostics
-winprep check --export C:\Users\Public\report.txt
-winprep check --battery-report [path]
-winprep clean              Prepare the laptop for handover (reseal into OOBE)
-winprep clean --dry-run    Inspect only; report whether a handover is possible
+winprep clean              Clean the approved data and prepare for handover
+winprep clean --dry-run    Inspect and preview the cleanup; change nothing
 winprep help               Full help
 winprep version            Version and build target
 ```
 
 Exit codes: `0` success, `1` failure or declined operation, `2` invalid
 usage. `--yes` skips the interactive prompt on `clean`; the safety checks
-still apply.
+still apply and the plan is still shown in full.
 
 ## The shop workflow
 
@@ -133,16 +129,17 @@ still apply.
    screen, press **Ctrl+Shift+F3**: the machine restarts into Audit Mode,
    signed in as the built-in Administrator.
 2. Install drivers, apply updates, configure the machine for demonstration.
-3. Run WinPrep and choose **Prepare for display**. It verifies the machine
+3. Run WinPrep and choose **Prepare for Display**. It verifies the machine
    is in a supported Audit Mode session. Nothing else is needed - the laptop
    stays demonstrable across restarts and shutdowns.
 4. Let customers test the laptop freely.
-5. Before the sale, run **Check this laptop** and review the report.
-6. Remove anything you created that should not reach the buyer (accounts,
-   files, tools). WinPrep lists what it finds but deletes nothing of yours.
-7. Run **Ready for buyer**, review the inspection, confirm the warnings,
-   and let Sysprep reseal and shut down the laptop.
-8. Switch the laptop on once yourself and confirm that Windows first-time
+5. Remove any accounts you created before the sale; WinPrep blocks the
+   handover until only the built-in Administrator remains, and it never
+   deletes accounts itself.
+6. Run **Clean & Finish**. Review the inspection and the cleanup plan,
+   confirm once, and let WinPrep remove the approved demonstration data and
+   reseal Windows. The laptop shuts down.
+7. Switch the laptop on once yourself and confirm that Windows first-time
    setup appears. Only then hand it to the buyer.
 
 Details and background: [docs/workflow.md](docs/workflow.md).
@@ -152,8 +149,9 @@ Details and background: [docs/workflow.md](docs/workflow.md).
 - **Audit Mode is an administrator session.** Anything a customer runs on a
   prepared laptop runs with full administrator rights. Audit Mode is a
   preparation environment, not a secure public kiosk.
-- **Sysprep does not erase data.** A resealed laptop still contains
-  everything from preparation and testing unless you wiped it.
+- **The cleanup is thorough but not a forensic wipe.** Deleted files can
+  remain recoverable until the disk reuses the space. If the laptop's data
+  must be unrecoverable, wipe the disk separately.
 - **The buyer's first boot must be verified by a human.** WinPrep reports
   that Sysprep ran; it cannot prove the resulting first-time setup works.
   Boot the machine yourself before selling it.
@@ -162,8 +160,8 @@ See [docs/safety.md](docs/safety.md) for the full discussion.
 
 ## Troubleshooting
 
-Common problems - handover blocked by pending restarts, Sysprep failing on
-provisioned Store apps, missing battery data - are covered in
+Common problems - handovers blocked by pending restarts, extra accounts, a
+running browser, Sysprep failing on provisioned Store apps - are covered in
 [docs/troubleshooting.md](docs/troubleshooting.md), along with the Sysprep
 log locations under `%WINDIR%\System32\Sysprep\Panther`.
 

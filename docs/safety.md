@@ -24,26 +24,30 @@ anything you would not ship. If a laptop must be demonstrable *and*
 hardened at the same time, that is a different product; WinPrep does not
 pretend otherwise.
 
-## What resealing actually removes - and what it does not
+## What the handover removes - and what it does not
 
-`Sysprep.exe /oobe /shutdown` reseals Windows so the next boot presents
-first-time setup. It does not:
+Clean & Finish removes the approved demonstration data before resealing:
+the Downloads contents and temporary files of the demonstration profile,
+the browsing data (caches, history, cookies, saved logins) of Edge and
+Chrome, and WinPrep's own data directory. Everything is listed in the plan
+before anything happens, and nothing outside the approved locations is
+touched.
 
-- Delete files. Everything written during preparation and customer testing
-  is still on the disk.
-- Remove accounts. Extra local accounts survive; their profile folders
-  survive even if the accounts are deleted.
-- Uninstall applications or drivers.
-- Clear browser profiles, event logs, registry history, or pagefile
-  contents.
+What the handover deliberately does not remove:
 
-WinPrep surfaces extra accounts and profile folders during the handover
-inspection because they are easy to miss, but it never deletes them.
-Deciding what leaves the shop is the operator's job.
+- Accounts. Extra local accounts survive the reseal, so WinPrep blocks the
+  handover until the operator has removed them through Windows; it never
+  deletes accounts or profile folders itself.
+- Personal folders. Desktop, Documents, Pictures, and similar are reported
+  for review, not deleted.
+- Applications or drivers.
+- Event logs, registry history, or pagefile contents.
 
-If the data itself must be gone, use a real wipe *before* preparing the
-laptop: reinstall Windows on a wiped disk, then enter Audit Mode. Wiping
-after resealing destroys the prepared installation.
+The cleanup is thorough but not a forensic wipe: deleted files can remain
+recoverable until the disk reuses the space. If the data must be
+unrecoverable, use a real wipe *before* preparing the laptop: reinstall
+Windows on a wiped disk, then enter Audit Mode. Wiping after resealing
+destroys the prepared installation.
 
 ## Dangerous assumptions this project refuses
 
@@ -57,10 +61,6 @@ after resealing destroys the prepared installation.
   every installation. WinPrep's detection requires multiple consistent
   signals (setup state, setup command line, session SID) before it calls a
   machine Audit Mode, and treats conflicts as "do not act".
-- **"The check passed, so the disk is healthy."** A successful storage query
-  is a successful query. Health values are the drive's own self-report.
-  WinPrep reports them with that caveat and never converts missing data
-  into good news.
 - **"Sysprep exited cleanly, so first boot works."** WinPrep reports that
   the reseal was initiated, not that the buyer's experience is verified.
   Boot the machine yourself.
@@ -71,9 +71,10 @@ after resealing destroys the prepared installation.
   instructions, when it is not.
 - WinPrep never elevates itself, never asks for a UAC prompt on the user's
   behalf, and never schedules tasks to run privileged later.
-- Read-only commands (`status`, `persist`, `check`) work unelevated. The
-  battery report needs elevation because `powercfg /batteryreport` does;
-  the error says exactly that.
+- Read-only commands (`persist`, `clean --dry-run`) work unelevated on the
+  machines they can inspect; the SAM account query behind the handover
+  inspection needs administrative rights, which the supported workflow
+  already requires.
 
 ## What WinPrep will never do
 

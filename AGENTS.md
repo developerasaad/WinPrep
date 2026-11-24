@@ -16,23 +16,30 @@ for that job.
 ## Architecture boundaries
 
 - All Windows access goes through `internal/platform` interfaces. Domain
-  packages (`audit`, `diagnostics`, `handover`, `persist`, `status`) and
-  presentation (`cli`, `tui`) import those interfaces, never
-  `internal/windows`.
+  packages (`audit`, `handover`, `persist`) and presentation (`cli`, `tui`)
+  import those interfaces, never `internal/windows`.
 - Only `internal/app` assembles implementations into the `App`. The CLI and
   TUI share it; duplicate business logic in a presentation layer is a bug.
 - Platform implementations stay read-only unless the operation is the
-  handover itself (artifact cleanup plus the single documented Sysprep
-  call). Registry writes are out of scope for v0.1.
+  handover itself: the approved cleanup of demonstration data, WinPrep's own
+  artifacts, and the single documented Sysprep call. Deletions only ever
+  touch paths the cleanup plan validated; reparse points are unlinked, never
+  followed.
 
 ## Safety rules
 
 - The handover preflight has no bypass. Never add a flag that skips
   blockers or unknown checks.
+- Nothing is modified before the operator's confirmation, and the cleanup
+  only ever runs the plan that was confirmed. A scope that changed since
+  confirmation aborts rather than expands.
 - `clean --dry-run` must not mutate anything. If you add a check to the
   preflight, verify it runs under dry-run and changes nothing.
 - Never add code that kills or schedules killing of `sysprep.exe`, and
-  never make the Sysprep invocation cancellable once accepted.
+  never make the Sysprep invocation cancellable once accepted. WinPrep also
+  never launches Sysprep while any sysprep.exe process exists.
+- Never delete user accounts or profile folders through the cleanup; the
+  handover blocks on them so the operator removes them through Windows.
 - Confirmation flows default to "no". The TUI confirm selector starts on
   the safe choice; CLI prompts treat empty/invalid input as decline.
 - Errors surface as errors. No fabricated success messages, no swallowed
