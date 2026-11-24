@@ -34,16 +34,6 @@ func PowerShellPath() string {
 	return filepath.Join(windir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 }
 
-// PowerCfgPath returns the full path of powercfg.exe, used for battery
-// reports.
-func PowerCfgPath() string {
-	windir := os.Getenv("WINDIR")
-	if windir == "" {
-		return "powercfg.exe"
-	}
-	return filepath.Join(windir, "System32", "powercfg.exe")
-}
-
 // DataDir returns the directory where WinPrep keeps its managed-artifact
 // manifest (%ProgramData%\WinPrep). It creates the directory if needed; that
 // is one of the very few things WinPrep writes outside its own process.

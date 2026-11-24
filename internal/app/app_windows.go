@@ -29,7 +29,6 @@ func New() *App {
 		sys, reg, run, procs,
 		artifacts.NewStore(dataDir),
 		windows.PowerShellPath(),
-		windows.PowerCfgPath(),
 		`C:\Windows\System32\Sysprep\Sysprep.exe`,
 		&windowsSysprep{runner: run},
 		windows.UsersDir(),

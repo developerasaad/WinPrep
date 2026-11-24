@@ -14,24 +14,6 @@ import (
 	"github.com/developerasaad/winprep/internal/platform/fake"
 )
 
-// HardwareJSON is a realistic diagnostics query result for a two-disk laptop
-// with a degraded battery and one problem device.
-const HardwareJSON = `{
-  "physicalDisks": [
-    {"DeviceId": "0", "FriendlyName": "Samsung PM981", "MediaType": "SSD", "BusType": "NVMe", "HealthStatus": "Healthy", "SizeBytes": 512110190592}
-  ],
-  "diskDrives": [],
-  "windowsDisk": 0,
-  "battery": [{"Name": "DELL 1VX1H"}],
-  "batteryDesigned": 60000,
-  "batteryFullCharge": 45000,
-  "batteryCycles": 312,
-  "problemDevices": [
-    {"Name": "Unknown USB Device", "DeviceId": "USB\\VID_0000", "Code": 43}
-  ],
-  "activation": [{"LicenseStatus": 1, "Edition": "Windows(R), Pro edition"}]
-}`
-
 // AccountsJSON is the local-account query result for a machine with no extra
 // accounts (only the built-in Administrator, RID 500).
 const AccountsJSON = `{"accounts":[{"Name":"Administrator","SID":"S-1-5-21-1-2-3-500","Disabled":false}]}`
@@ -110,12 +92,9 @@ func New(dataDir string) *Fixture {
 	}
 
 	run := fake.NewRunner()
-	// The fragments distinguish the two PowerShell queries: only the hardware
-	// script mentions Get-PhysicalDisk, and only the account script mentions
-	// Win32_UserAccount.
-	run.SetScriptResult("powershell.exe", "Get-PhysicalDisk", platform.CommandResult{Stdout: HardwareJSON})
+	// The account query distinguishes its script by the Win32_UserAccount
+	// fragment.
 	run.SetScriptResult("powershell.exe", "Win32_UserAccount", platform.CommandResult{Stdout: AccountsJSON})
-	run.SetResult("powercfg.exe", platform.CommandResult{})
 
 	f := &Fixture{
 		Sys:     sys,
@@ -127,7 +106,7 @@ func New(dataDir string) *Fixture {
 	}
 	f.App = app.Assemble(
 		sys, reg, run, f.Procs, f.Store,
-		"powershell.exe", "powercfg.exe",
+		"powershell.exe",
 		`C:\Windows\System32\Sysprep\Sysprep.exe`,
 		f.Sysprep,
 		usersDir,

@@ -101,10 +101,10 @@ func (s *Service) Inspect(ctx context.Context) (Report, error) {
 		if len(r.Artifacts) > 0 {
 			r.Explanation = append(r.Explanation,
 				"WinPrep has previously recorded changes on this machine. They will be removed automatically "+
-					"during \"Ready for buyer\".")
+					"during \"Clean & Finish\".")
 		}
 		r.Guidance = append(r.Guidance,
-			"When you are ready to sell, run \"Ready for buyer\". It validates the machine, removes WinPrep's "+
+			"When you are ready to sell, run \"Clean & Finish\". It validates the machine, removes WinPrep's "+
 				"own artifacts, and reseals Windows into first-time setup.",
 			"Remove any accounts, files, or tools you created while preparing the laptop yourself; WinPrep will "+
 				"not delete your data.")

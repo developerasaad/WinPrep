@@ -3,14 +3,11 @@ package tui
 import (
 	"context"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/developerasaad/winprep/internal/app"
-	"github.com/developerasaad/winprep/internal/diagnostics"
 	"github.com/developerasaad/winprep/internal/handover"
 	"github.com/developerasaad/winprep/internal/persist"
-	"github.com/developerasaad/winprep/internal/status"
 )
 
 // screen identifies the active view.
@@ -19,8 +16,6 @@ type screen int
 const (
 	screenMenu screen = iota
 	screenHelp
-	screenStatus
-	screenCheck
 	screenPersist
 	screenHandover
 )
@@ -44,10 +39,8 @@ type menuItem struct {
 }
 
 var menuItems = []menuItem{
-	{label: "Prepare for display", desc: "Verify this laptop is ready to show to customers, without finishing Windows setup."},
-	{label: "Check this laptop", desc: "Read-only health check: computer, storage, battery, devices, activation."},
-	{label: "Ready for buyer", desc: "Inspect, clean up WinPrep's own changes, and reseal Windows into first-time setup."},
-	{label: "System information", desc: "Windows edition, build, user, privileges, and setup state."},
+	{label: "Prepare for Display", desc: "Verify this laptop is ready to show to customers, without finishing Windows setup."},
+	{label: "Clean & Finish", desc: "Remove the approved demonstration data and reseal Windows into first-time setup."},
 	{label: "Help", desc: "What WinPrep does, what it deliberately does not do, and the controls."},
 	{label: "Exit", desc: "Close WinPrep."},
 }
@@ -57,25 +50,13 @@ var menuItems = []menuItem{
 
 type headerLoadedMsg struct {
 	loadID int
-	report status.Report
-	err    error
-}
-
-type statusLoadedMsg struct {
-	loadID int
-	report status.Report
+	report persist.Report
 	err    error
 }
 
 type persistLoadedMsg struct {
 	loadID int
 	report persist.Report
-	err    error
-}
-
-type checkLoadedMsg struct {
-	loadID int
-	report diagnostics.Report
 	err    error
 }
 
@@ -95,17 +76,6 @@ type resealDoneMsg struct {
 	loadID int
 	result handover.ResealResult
 	err    error
-}
-
-type batteryDoneMsg struct {
-	loadID int
-	path   string
-	err    error
-}
-
-type exportDoneMsg struct {
-	path string
-	err  error
 }
 
 // Model is the Bubble Tea model driving the whole interface. All methods use
@@ -132,18 +102,14 @@ type Model struct {
 	loadingWhat        string
 	cancel             context.CancelFunc
 
-	// header holds the fast status summary shown in the menu header.
-	header      status.Report
+	// header holds the fast readiness summary shown in the menu header.
+	header      persist.Report
 	headerErr   error
 	headerShown bool
 
 	// screen data
-	stat    status.Report
-	statErr error
 	pers    persist.Report
 	persErr error
-	diag    diagnostics.Report
-	diagErr error
 
 	// scroll position for long views; view() recomputes the maximum.
 	scroll int
@@ -152,17 +118,11 @@ type Model struct {
 	phase         handoverPhase
 	preflight     handover.PreflightResult
 	preflightErr  error
-	confirmChoice int // 0 = go back (safe default), 1 = proceed
+	confirmChoice int // 0 = Cancel (safe default), 1 = proceed
 	cleanup       []handover.CleanupResult
 	cleanupErr    error
 	reseal        handover.ResealResult
 	resealErr     error
-
-	// check-screen extras
-	exporting   bool
-	exportInput textinput.Model
-	exportErr   string
-	batteryNote string
 
 	// notice is a one-line message shown above the footer (errors, results).
 	notice string
@@ -170,15 +130,10 @@ type Model struct {
 
 // NewModel returns the initial model.
 func NewModel(a *app.App, parent context.Context) *Model {
-	ti := textinput.New()
-	ti.Placeholder = "report.txt"
-	ti.CharLimit = 260
-	ti.Prompt = "Save to: "
 	return &Model{
-		a:           a,
-		parent:      parent,
-		screen:      screenMenu,
-		exportInput: ti,
+		a:      a,
+		parent: parent,
+		screen: screenMenu,
 	}
 }
 
@@ -186,9 +141,9 @@ func NewModel(a *app.App, parent context.Context) *Model {
 // menu renders immediately.
 func (m *Model) Init() tea.Cmd {
 	return m.start(func(ctx context.Context) tea.Msg {
-		r, err := m.a.Status.Inspect(ctx)
+		r, err := m.a.Persist.Inspect(ctx)
 		return headerLoadedMsg{report: r, err: err}
-	}, "checking this computer", false)
+	}, "checking this laptop", false)
 }
 
 // start registers an async operation. cancellable marks whether the operator
@@ -214,13 +169,7 @@ func (m *Model) start(fn func(ctx context.Context) tea.Msg, what string, cancell
 		case headerLoadedMsg:
 			v.loadID = id
 			return v
-		case statusLoadedMsg:
-			v.loadID = id
-			return v
 		case persistLoadedMsg:
-			v.loadID = id
-			return v
-		case checkLoadedMsg:
 			v.loadID = id
 			return v
 		case preflightLoadedMsg:
@@ -230,9 +179,6 @@ func (m *Model) start(fn func(ctx context.Context) tea.Msg, what string, cancell
 			v.loadID = id
 			return v
 		case resealDoneMsg:
-			v.loadID = id
-			return v
-		case batteryDoneMsg:
 			v.loadID = id
 			return v
 		default:
@@ -287,30 +233,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.headerShown = true
 		return m, nil
 
-	case statusLoadedMsg:
-		if m.stale(msg.loadID) {
-			return m, nil
-		}
-		m.finishLoading()
-		m.stat, m.statErr = msg.report, msg.err
-		m.scroll = 0
-		return m, nil
-
 	case persistLoadedMsg:
 		if m.stale(msg.loadID) {
 			return m, nil
 		}
 		m.finishLoading()
 		m.pers, m.persErr = msg.report, msg.err
-		m.scroll = 0
-		return m, nil
-
-	case checkLoadedMsg:
-		if m.stale(msg.loadID) {
-			return m, nil
-		}
-		m.finishLoading()
-		m.diag, m.diagErr = msg.report, msg.err
 		m.scroll = 0
 		return m, nil
 
@@ -351,29 +279,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.phase = hoResult
 		m.scroll = 0
 		return m, nil
-
-	case batteryDoneMsg:
-		if m.stale(msg.loadID) {
-			return m, nil
-		}
-		m.finishLoading()
-		if msg.err != nil {
-			m.batteryNote = "Battery report failed: " + msg.err.Error()
-		} else {
-			m.batteryNote = "Battery report saved to: " + msg.path
-		}
-		return m, nil
-
-	case exportDoneMsg:
-		m.exporting = false
-		m.exportInput.Blur()
-		if msg.err != nil {
-			m.exportErr = "Saving failed: " + msg.err.Error()
-		} else {
-			m.exportErr = ""
-			m.notice = "Report saved to: " + msg.path
-		}
-		return m, nil
 	}
 	return m, nil
 }
@@ -409,19 +314,11 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.exporting {
-		return m.exportKey(s, k)
-	}
-
 	switch m.screen {
 	case screenMenu:
 		return m.menuKey(s)
 	case screenHelp:
 		return m.viewerKey(s, screenMenu)
-	case screenStatus:
-		return m.viewerKey(s, screenMenu)
-	case screenCheck:
-		return m.checkKey(s)
 	case screenPersist:
 		return m.viewerKey(s, screenMenu)
 	case screenHandover:
@@ -446,20 +343,13 @@ func (m *Model) menuKey(s string) (tea.Model, tea.Cmd) {
 		m.cursor = len(menuItems) - 1
 	case "enter":
 		switch m.cursor {
-		case 0: // Prepare for display
+		case 0: // Prepare for Display
 			m.screen = screenPersist
 			return m, m.start(func(ctx context.Context) tea.Msg {
 				r, err := m.a.Persist.Inspect(ctx)
 				return persistLoadedMsg{report: r, err: err}
 			}, "checking this laptop", true)
-		case 1: // Check this laptop
-			m.screen = screenCheck
-			m.batteryNote = ""
-			return m, m.start(func(ctx context.Context) tea.Msg {
-				r, err := m.a.Diag.Inspect(ctx)
-				return checkLoadedMsg{report: r, err: err}
-			}, "checking this laptop (storage, battery, devices)", true)
-		case 2: // Ready for buyer
+		case 1: // Clean & Finish
 			m.screen = screenHandover
 			m.phase = hoInspect
 			m.confirmChoice = 0
@@ -469,16 +359,10 @@ func (m *Model) menuKey(s string) (tea.Model, tea.Cmd) {
 				r, err := m.a.Handover.Inspect(ctx)
 				return preflightLoadedMsg{result: r, err: err}
 			}, "inspecting this laptop before the handover", true)
-		case 3: // System information
-			m.screen = screenStatus
-			return m, m.start(func(ctx context.Context) tea.Msg {
-				r, err := m.a.Status.Inspect(ctx)
-				return statusLoadedMsg{report: r, err: err}
-			}, "reading system information", true)
-		case 4: // Help
+		case 2: // Help
 			m.screen = screenHelp
 			m.scroll = 0
-		case 5: // Exit
+		case 3: // Exit
 			return m, tea.Quit
 		}
 	case "esc", "q":
@@ -512,49 +396,6 @@ func (m *Model) viewerKey(s string, back screen) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) checkKey(s string) (tea.Model, tea.Cmd) {
-	switch s {
-	case "e", "E":
-		m.exporting = true
-		m.exportErr = ""
-		m.exportInput.SetValue(defaultExportPath("winprep-report.txt"))
-		m.exportInput.CursorEnd()
-		return m, m.exportInput.Focus()
-	case "b", "B":
-		m.batteryNote = ""
-		return m, m.start(func(ctx context.Context) tea.Msg {
-			p, err := m.a.Diag.BatteryReport(ctx, "")
-			return batteryDoneMsg{path: p, err: err}
-		}, "generating the battery report", true)
-	}
-	return m.viewerKey(s, screenMenu)
-}
-
-// exportKey handles the save-path prompt on the check screen.
-func (m *Model) exportKey(s string, k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch s {
-	case "enter":
-		path := m.exportInput.Value()
-		if path == "" {
-			m.exportErr = "Enter a file path, or press ESC to cancel."
-			return m, nil
-		}
-		text := m.diag.Text()
-		return m, func() tea.Msg {
-			err := writeReport(path, text)
-			return exportDoneMsg{path: path, err: err}
-		}
-	case "esc":
-		m.exporting = false
-		m.exportInput.Blur()
-		m.exportErr = ""
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.exportInput, cmd = m.exportInput.Update(k)
-	return m, cmd
-}
-
 func (m *Model) handoverKey(s string) (tea.Model, tea.Cmd) {
 	switch m.phase {
 	case hoReview:
@@ -565,7 +406,7 @@ func (m *Model) handoverKey(s string) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.phase = hoConfirm
-			m.confirmChoice = 0 // safe default: go back
+			m.confirmChoice = 0 // safe default: cancel
 			m.scroll = 0
 			return m, nil
 		default:
@@ -637,18 +478,11 @@ func (m *Model) viewportLines() []string {
 	switch m.screen {
 	case screenHelp:
 		return wrap(helpText(), w)
-	case screenStatus:
-		if m.statErr != nil {
-			return wrap("Could not read the system status:\n"+m.statErr.Error(), w)
-		}
-		return wrapLines(m.stat.Lines(), w)
 	case screenPersist:
 		if m.persErr != nil {
 			return wrap("Could not check this laptop:\n"+m.persErr.Error(), w)
 		}
 		return wrapLines(m.pers.Lines(), w)
-	case screenCheck:
-		return wrap(renderDiagnostics(m.diag, m.diagErr, m.batteryNote), w)
 	case screenHandover:
 		switch m.phase {
 		case hoReview:

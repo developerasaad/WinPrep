@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/developerasaad/winprep/internal/app"
-	"github.com/developerasaad/winprep/internal/textfile"
 )
 
 // usageText is the short command summary printed for usage errors.
@@ -15,10 +14,8 @@ func usageText() string {
 		"Usage: winprep [command]",
 		"",
 		"Commands:",
-		"  status    Show a read-only summary of this Windows installation",
 		"  persist   Verify the laptop is ready for customer demonstrations",
-		"  check     Run read-only hardware diagnostics",
-		"  clean     Prepare the laptop for handover to a buyer (reseal into first-time setup)",
+		"  clean     Prepare the laptop for handover to a buyer (clean up, reseal)",
 		"  help      Show full help",
 		"  version   Show the version",
 		"",
@@ -34,34 +31,22 @@ func helpText(a *app.App) string {
 	fmt.Fprintf(&b, "%s\n", app.VersionString())
 	b.WriteString("A preparation and handover utility for Windows laptops being resold.\n")
 	b.WriteString("\nUsage:\n")
-	b.WriteString("  winprep                Open the interactive menu\n")
-	b.WriteString("  winprep status         Read-only summary of this Windows installation\n")
-	b.WriteString("  winprep persist        Verify the laptop is ready for demonstrations\n")
-	b.WriteString("  winprep check          Read-only hardware diagnostics\n")
-	b.WriteString("  winprep clean          Prepare the laptop for handover to a buyer\n")
-	b.WriteString("  winprep clean --dry-run  Inspect only; report whether a handover is possible\n")
-	b.WriteString("  winprep help           Show this help\n")
-	b.WriteString("  winprep version        Show the version\n")
+	b.WriteString("  winprep                  Open the interactive menu\n")
+	b.WriteString("  winprep persist          Verify the laptop is ready for demonstrations\n")
+	b.WriteString("  winprep clean            Prepare the laptop for handover to a buyer\n")
+	b.WriteString("  winprep clean --dry-run  Inspect and preview the cleanup; change nothing\n")
+	b.WriteString("  winprep help             Show this help\n")
+	b.WriteString("  winprep version          Show the version\n")
 	b.WriteString("\nCommands:\n")
-	b.WriteString("\n  status\n")
-	b.WriteString("    Shows the Windows edition and build, the computer, the current user and\n")
-	b.WriteString("    privilege level, the setup state (including Audit Mode detection), and\n")
-	b.WriteString("    whether this machine fits WinPrep's workflow. Changes nothing.\n")
 	b.WriteString("\n  persist\n")
 	b.WriteString("    Verifies the machine is in a supported Audit Mode session and explains\n")
 	b.WriteString("    what that means for demonstrations. Windows keeps Audit Mode alive across\n")
 	b.WriteString("    restarts by itself, so this command does not modify the system.\n")
-	b.WriteString("\n  check\n")
-	b.WriteString("    Collects computer details, storage, battery, device problems, and the\n")
-	b.WriteString("    Windows activation state. Read-only. Options:\n")
-	b.WriteString("      --export <path>      Save the report to a file\n")
-	b.WriteString("      --battery-report [path]\n")
-	b.WriteString("                           Also generate a Windows battery report (HTML)\n")
 	b.WriteString("\n  clean\n")
-	b.WriteString("    Runs the full handover procedure: safety inspection, removal of\n")
-	b.WriteString("    WinPrep's own artifacts, explicit confirmation, then\n")
-	b.WriteString("    Sysprep.exe /oobe /shutdown to reseal Windows into first-time setup.\n")
-	b.WriteString("    Requires an administrator console. Options:\n")
+	b.WriteString("    Runs the full handover procedure: safety inspection, preview of the\n")
+	b.WriteString("    approved cleanup, explicit confirmation, removal of WinPrep's own\n")
+	b.WriteString("    artifacts, then Sysprep.exe /oobe /shutdown to reseal Windows into\n")
+	b.WriteString("    first-time setup. Requires an administrator console. Options:\n")
 	b.WriteString("      --dry-run  Inspect and report only; change nothing\n")
 	b.WriteString("      --yes      Skip the interactive prompt (safety checks still apply)\n")
 	b.WriteString("\n")
@@ -82,10 +67,4 @@ func helpText(a *app.App) string {
 // winprep.exe built for the wrong platform says so honestly.
 func buildTarget() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
-}
-
-// writeTextFile saves a report through the shared text writer (UTF-8 with
-// Windows line endings).
-func writeTextFile(path, content string) error {
-	return textfile.Write(path, content)
 }

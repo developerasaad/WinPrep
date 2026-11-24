@@ -35,8 +35,6 @@ var (
 	styleWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	styleError = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 
-	styleSectionTitle = lipgloss.NewStyle().Bold(true).Underline(true)
-
 	styleRule = lipgloss.NewStyle().Faint(true)
 )
 

@@ -33,8 +33,8 @@ func main() {
 	// message and the CLI instead of a broken menu.
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		fmt.Fprintln(os.Stderr, "WinPrep needs an interactive terminal for its menu.")
-		fmt.Fprintln(os.Stderr, "Use the commands instead: winprep status, winprep persist, winprep check,")
-		fmt.Fprintln(os.Stderr, "winprep clean. Run \"winprep help\" for details.")
+		fmt.Fprintln(os.Stderr, "Use the commands instead: winprep persist or winprep clean.")
+		fmt.Fprintln(os.Stderr, "Run \"winprep help\" for details.")
 		os.Exit(cli.ExitUsage)
 	}
 

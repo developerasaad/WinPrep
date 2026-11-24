@@ -10,7 +10,6 @@ import (
 
 	"github.com/developerasaad/winprep/internal/app"
 	"github.com/developerasaad/winprep/internal/handover"
-	"github.com/developerasaad/winprep/internal/textfile"
 )
 
 // RunFallback drives a plain numbered menu for consoles that cannot host the
@@ -28,12 +27,11 @@ func RunFallback(ctx context.Context, a *app.App, in io.Reader, out io.Writer) i
 
 	reader := bufio.NewReader(in)
 	for {
-		fmt.Fprintln(w, "  1  Prepare for display")
-		fmt.Fprintln(w, "  2  Check this laptop")
-		fmt.Fprintln(w, "  3  Ready for buyer")
-		fmt.Fprintln(w, "  4  System information")
-		fmt.Fprintln(w, "  5  Exit")
-		fmt.Fprint(w, "Choose 1-5: ")
+		fmt.Fprintln(w, "  1  Prepare for Display")
+		fmt.Fprintln(w, "  2  Clean & Finish")
+		fmt.Fprintln(w, "  3  Help")
+		fmt.Fprintln(w, "  4  Exit")
+		fmt.Fprint(w, "Choose 1-4: ")
 		w.Flush()
 
 		line, err := reader.ReadString('\n')
@@ -43,8 +41,8 @@ func RunFallback(ctx context.Context, a *app.App, in io.Reader, out io.Writer) i
 			return 0
 		}
 		choice, convErr := strconv.Atoi(strings.TrimSpace(line))
-		if convErr != nil || choice < 1 || choice > 5 {
-			fmt.Fprintln(w, "Please enter a number from 1 to 5.")
+		if convErr != nil || choice < 1 || choice > 4 {
+			fmt.Fprintln(w, "Please enter a number from 1 to 4.")
 			fmt.Fprintln(w)
 			continue
 		}
@@ -56,43 +54,12 @@ func RunFallback(ctx context.Context, a *app.App, in io.Reader, out io.Writer) i
 				return r.Lines(), err
 			})
 		case 2:
-			report, err := a.Diag.Inspect(ctx)
-			if err != nil {
-				reportFallbackError(w, "running diagnostics", err)
-				continue
-			}
-			fmt.Fprint(w, report.Text())
-			fmt.Fprintln(w)
-			if !report.AllAvailable() {
-				fmt.Fprintln(w, "Some information was unavailable; the notes above explain why.")
-				fmt.Fprintln(w)
-			}
-			if askYes(w, reader, "Save this report to a file? [y/N] ", false) {
-				fmt.Fprint(w, "File path: ")
-				w.Flush()
-				pathLine, perr := reader.ReadString('\n')
-				if perr != nil {
-					reportFallbackError(w, "reading the file path", perr)
-					continue
-				}
-				path := strings.TrimSpace(pathLine)
-				if path == "" {
-					fmt.Fprintln(w, "No path given; the report was not saved.")
-				} else if werr := textfile.Write(path, report.Text()); werr != nil {
-					reportFallbackError(w, "saving the report", werr)
-				} else {
-					fmt.Fprintln(w, "Report saved to: "+path)
-				}
-			}
-			fmt.Fprintln(w)
-		case 3:
 			runFallbackHandover(ctx, a, w, reader)
-		case 4:
-			runFallbackAction(w, reader, "reading system information", func() ([]string, error) {
-				r, err := a.Status.Inspect(ctx)
-				return r.Lines(), err
+		case 3:
+			runFallbackAction(w, reader, "showing help", func() ([]string, error) {
+				return strings.Split(helpText(), "\n"), nil
 			})
-		case 5:
+		case 4:
 			return 0
 		}
 	}
@@ -187,8 +154,8 @@ func runFallbackHandover(ctx context.Context, a *app.App, w *bufio.Writer, reade
 	fmt.Fprintln(w)
 }
 
-// proceedQuestion is the step-5 confirmation text, shared verbatim with the
-// CLI so both interfaces warn identically.
+// proceedQuestion is the confirmation text, shared verbatim with the CLI so
+// both interfaces warn identically.
 func proceedQuestion() string {
 	return strings.Join([]string{
 		"You are about to prepare this laptop for handover to a buyer.",

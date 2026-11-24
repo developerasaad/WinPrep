@@ -1,5 +1,5 @@
-// Package format renders raw values the way people read them. It exists so
-// the status, diagnostics, and reporting code share one set of formatters.
+// Package format renders raw values the way people read them, so the
+// reporting code shares one set of formatters.
 package format
 
 import "fmt"
@@ -16,12 +16,4 @@ func Bytes(n uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
-}
-
-// MilliWattHours renders a battery capacity. Windows reports battery
-// capacities in milliwatt-hours; both the raw and the friendlier
-// watt-hour value are shown.
-func MilliWattHours(n uint64) string {
-	wh := float64(n) / 1000
-	return fmt.Sprintf("%.0f mWh (%.1f Wh)", float64(n), wh)
 }

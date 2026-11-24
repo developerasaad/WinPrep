@@ -120,57 +120,17 @@ func TestHeaderLoadFillsMenu(t *testing.T) {
 		t.Fatal("the header result should have landed")
 	}
 	view := plain(m.View().Content)
-	if !strings.Contains(view, "Windows 11 Pro") {
-		t.Error("header should show the OS name")
-	}
-	if !strings.Contains(view, "Audit Mode confirmed") {
+	if !strings.Contains(view, "Current mode: Audit Mode confirmed") {
 		t.Error("header should show the audit state")
 	}
-	if !strings.Contains(view, "Running as administrator") {
-		t.Error("header should show the privilege state")
-	}
-}
-
-func TestEscCancelsRunningCheck(t *testing.T) {
-	m, _ := newModel(t)
-	// Select "Check this laptop" (index 1).
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.screen != screenCheck || !m.loading {
-		t.Fatalf("check should be loading, screen=%v loading=%v", m.screen, m.loading)
-	}
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	if m.screen != screenMenu {
-		t.Error("ESC during a cancellable load returns to the menu")
-	}
-	if m.loading {
-		t.Error("ESC must end the loading state")
-	}
-}
-
-func TestStaleResultsAreDropped(t *testing.T) {
-	m, _ := newModel(t)
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	startCmd := press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if startCmd == nil {
-		t.Fatal("starting a check should produce a command")
-	}
-	// Cancel before the result lands.
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	// The late result arrives now.
-	runCmd(t, m, startCmd)
-	if m.screen != screenMenu {
-		t.Error("a cancelled screen must ignore its late result")
-	}
-	if m.diagErr != nil || len(m.diag.Sections) != 0 {
-		t.Error("cancelled check data must not be applied")
+	if !strings.Contains(view, "Status: Ready for display") {
+		t.Error("header should show the readiness state")
 	}
 }
 
 func TestHandoverHappyPathWithDeliberateConfirm(t *testing.T) {
 	m, f := newModel(t)
-	// Select "Ready for buyer" (index 2).
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	// Select "Clean & Finish" (index 1).
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.screen != screenHandover || m.phase != hoInspect {
@@ -267,7 +227,6 @@ func TestHandoverBlockedRefusesToContinue(t *testing.T) {
 	f.Sys.Usr.IsElevated = false // blocking condition: not elevated
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	result, err := f.App.Handover.Inspect(context.Background())
@@ -299,7 +258,6 @@ func TestHandoverSysprepErrorShowsLogs(t *testing.T) {
 	f.Sysprep.Res = platform.CommandResult{ExitCode: 1}
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	result, err := f.App.Handover.Inspect(context.Background())
 	if err != nil {
@@ -326,53 +284,12 @@ func TestHandoverSysprepErrorShowsLogs(t *testing.T) {
 	}
 }
 
-func TestExportPromptWritesReport(t *testing.T) {
-	m, _ := newModel(t)
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	send(t, m, checkLoadedMsg{loadID: m.loadID}) // zero report: enough for this test
-
-	press(t, m, tea.KeyPressMsg{Code: 'e'})
-	if !m.exporting {
-		t.Fatal("E should open the export prompt")
-	}
-	if m.exportInput.Value() == "" {
-		t.Error("the prompt should pre-fill a suggested location")
-	}
-	// Replace the suggestion with an explicit path, character by character.
-	path := t.TempDir() + "/report.txt"
-	m.exportInput.SetValue("")
-	for _, r := range path {
-		press(t, m, tea.KeyPressMsg{Code: r, Text: string(r)})
-	}
-	if got := m.exportInput.Value(); got != path {
-		t.Fatalf("typed path = %q, want %q", got, path)
-	}
-	enterCmd := press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	runCmd(t, m, enterCmd)
-
-	if m.exporting {
-		t.Error("ENTER should close the export prompt")
-	}
-	if m.exportErr != "" {
-		t.Errorf("exportErr = %q", m.exportErr)
-	}
-	if !strings.Contains(m.notice, "Report saved to:") {
-		t.Errorf("notice = %q, want a saved confirmation", m.notice)
-	}
-	if !strings.Contains(plain(m.View().Content), "Report saved to:") {
-		t.Error("the screen should confirm the saved report")
-	}
-}
-
 func TestScrollingAndClamp(t *testing.T) {
 	m, _ := newModel(t)
 	// Help screen has long content.
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // Help
+	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // Help (index 2)
 	if m.screen != screenHelp {
 		t.Fatalf("screen = %v, want screenHelp", m.screen)
 	}
@@ -443,8 +360,9 @@ func TestViewIsASCIIOnly(t *testing.T) {
 			t.Fatalf("view contains non-ASCII rune %q (%U); Windows consoles may not render it", r, r)
 		}
 	}
-	// Exercise the other screens' rendering too.
-	for i := 0; i < 4; i++ {
+	// Exercise the other screens' rendering too (indices 0-2; index 3 is
+	// Exit, which leaves the menu rather than opening a screen).
+	for i := 0; i < 3; i++ {
 		press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 		press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 		for _, r := range plain(m.View().Content) {

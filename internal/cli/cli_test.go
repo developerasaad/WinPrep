@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,24 +74,6 @@ func TestUnknownCommandIsUsageError(t *testing.T) {
 	}
 }
 
-func TestStatusShowsSystemAndAuditState(t *testing.T) {
-	f := apptest.New(t.TempDir())
-	io, out, _ := newIO("", false)
-	if code := Run(t.Context(), f.App, io, []string{"status"}); code != ExitOK {
-		t.Fatalf("exit = %d", code)
-	}
-	s := out.String()
-	for _, want := range []string{
-		"Windows 11 Pro",
-		"Audit Mode (confirmed)",
-		"Suitable for the WinPrep workflow: Yes",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("status output missing %q", want)
-		}
-	}
-}
-
 func TestPersistExplainsAuditMode(t *testing.T) {
 	f := apptest.New(t.TempDir())
 	io, out, _ := newIO("", false)
@@ -102,83 +82,6 @@ func TestPersistExplainsAuditMode(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "ready to be demonstrated") {
 		t.Error("persist should report the laptop as demonstrable")
-	}
-}
-
-func TestCheckRunsDiagnostics(t *testing.T) {
-	f := apptest.New(t.TempDir())
-	io, out, _ := newIO("", false)
-	if code := Run(t.Context(), f.App, io, []string{"check"}); code != ExitOK {
-		t.Fatalf("exit = %d", code)
-	}
-	s := out.String()
-	for _, want := range []string{"Computer", "Storage", "Battery", "Devices with problems", "Windows activation"} {
-		if !strings.Contains(s, want) {
-			t.Errorf("check output missing section %q", want)
-		}
-	}
-	if !f.Run.Invoked("powershell.exe") {
-		t.Error("the hardware query should have run through powershell")
-	}
-}
-
-func TestCheckExportWritesCRLFFile(t *testing.T) {
-	f := apptest.New(t.TempDir())
-	dir := t.TempDir()
-	path := filepath.Join(dir, "report.txt")
-
-	io, out, _ := newIO("", false)
-	code := Run(t.Context(), f.App, io, []string{"check", "--export", path})
-	if code != ExitOK {
-		t.Fatalf("exit = %d, output:\n%s", code, out.String())
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(data, []byte("\r\n")) {
-		t.Error("exported report should use Windows line endings")
-	}
-	if !strings.Contains(string(data), "WinPrep diagnostic report") {
-		t.Error("exported report is missing its header")
-	}
-	if !strings.Contains(out.String(), "Report saved to:") {
-		t.Error("CLI should confirm where the report was saved")
-	}
-}
-
-func TestCheckBatteryReport(t *testing.T) {
-	f := apptest.New(t.TempDir())
-	dir := t.TempDir()
-	path := filepath.Join(dir, "battery.html")
-	// The fake powercfg succeeds without writing anything, so the file is
-	// created beforehand; the service verifies its presence afterwards.
-	if err := os.WriteFile(path, []byte("<html></html>"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	io, out, _ := newIO("", false)
-	code := Run(t.Context(), f.App, io, []string{"check", "--battery-report", path})
-	if code != ExitOK {
-		t.Fatalf("exit = %d, output:\n%s", code, out.String())
-	}
-	if !strings.Contains(out.String(), "Battery report saved to:") {
-		t.Error("CLI should confirm the battery report location")
-	}
-	if !f.Run.Invoked("powercfg.exe") {
-		t.Error("powercfg should have been invoked")
-	}
-}
-
-func TestCheckRejectsMissingExportPath(t *testing.T) {
-	f := apptest.New(t.TempDir())
-	io, _, errOut := newIO("", false)
-	code := Run(t.Context(), f.App, io, []string{"check", "--export"})
-	if code != ExitUsage {
-		t.Errorf("exit = %d, want %d", code, ExitUsage)
-	}
-	if !strings.Contains(errOut.String(), "--export needs a file path") {
-		t.Errorf("stderr = %q", errOut.String())
 	}
 }
 

@@ -69,7 +69,7 @@ func TestHelpCommand(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit = %d", code)
 	}
-	for _, want := range []string{"winprep status", "winprep clean --dry-run", "Exit codes"} {
+	for _, want := range []string{"winprep persist", "winprep clean --dry-run", "Exit codes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q", want)
 		}
@@ -84,23 +84,6 @@ func TestUnknownCommandExitsWithUsageCode(t *testing.T) {
 	}
 	if !strings.Contains(out, "Unknown command") {
 		t.Errorf("output should name the unknown command:\n%s", out)
-	}
-}
-
-func TestStatusReportsHonestFacts(t *testing.T) {
-	exe := winprepExe(t)
-	out, code := run(t, exe, nil, "status")
-	if code != 0 {
-		t.Fatalf("exit = %d, output:\n%s", code, out)
-	}
-	for _, want := range []string{"Build:", "Privileges:", "Setup state:"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("status output missing %q", want)
-		}
-	}
-	// The privilege line must state one of the two honest outcomes.
-	if !strings.Contains(out, "Running as administrator") && !strings.Contains(out, "Not elevated") {
-		t.Errorf("status must report the actual privilege state:\n%s", out)
 	}
 }
 
@@ -155,7 +138,7 @@ func TestExecutableRunsFromPathWithSpaces(t *testing.T) {
 	if err := os.WriteFile(dst, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, code := run(t, dst, nil, "status")
+	out, code := run(t, dst, nil, "version")
 	if code != 0 {
 		t.Errorf("exit = %d running from %s, output:\n%s", code, spaced, out)
 	}

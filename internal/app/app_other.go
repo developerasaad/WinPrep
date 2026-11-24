@@ -25,7 +25,6 @@ func New() *App {
 		&stubProcessLister{},
 		artifacts.NewStore("."),
 		"powershell.exe",
-		"powercfg.exe",
 		"",
 		&stubSysprep{},
 		"",

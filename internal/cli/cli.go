@@ -42,12 +42,8 @@ func Run(ctx context.Context, a *app.App, io IO, args []string) int {
 	rest := args[1:]
 
 	switch cmd {
-	case "status":
-		return runStatus(ctx, a, io)
 	case "persist":
 		return runPersist(ctx, a, io)
-	case "check":
-		return runCheck(ctx, a, io, rest)
 	case "clean":
 		return runClean(ctx, a, io, rest)
 	case "help", "--help", "-h", "/?":
@@ -67,18 +63,6 @@ func versionText() string {
 	return app.VersionString() + ", " + buildTarget()
 }
 
-// runStatus prints the read-only system summary.
-func runStatus(ctx context.Context, a *app.App, io IO) int {
-	r, err := a.Status.Inspect(ctx)
-	if err != nil {
-		return reportError(io, "reading the system status", err)
-	}
-	for _, line := range r.Lines() {
-		fmt.Fprintln(io.Out, line)
-	}
-	return ExitOK
-}
-
 // runPersist verifies display-readiness and explains what (if anything) is
 // needed.
 func runPersist(ctx context.Context, a *app.App, io IO) int {
@@ -88,61 +72,6 @@ func runPersist(ctx context.Context, a *app.App, io IO) int {
 	}
 	for _, line := range r.Lines() {
 		fmt.Fprintln(io.Out, line)
-	}
-	return ExitOK
-}
-
-// runCheck performs the read-only diagnostics.
-func runCheck(ctx context.Context, a *app.App, io IO, args []string) int {
-	exportPath := ""
-	batteryPath := ""
-	wantBattery := false
-
-	i := 0
-	for i < len(args) {
-		arg := args[i]
-		switch arg {
-		case "--export":
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return usageError(io, "--export needs a file path, for example: winprep check --export C:\\Users\\Public\\report.txt")
-			}
-			i++
-			exportPath = args[i]
-		case "--battery-report":
-			wantBattery = true
-			// The path is optional; a following non-flag token is the path.
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				batteryPath = args[i]
-			}
-		case "--help", "-h":
-			fmt.Fprint(io.Out, helpText(a))
-			return ExitOK
-		default:
-			return usageError(io, fmt.Sprintf("unknown option for check: %s", arg))
-		}
-		i++
-	}
-
-	report, err := a.Diag.Inspect(ctx)
-	if err != nil {
-		return reportError(io, "running diagnostics", err)
-	}
-	fmt.Fprint(io.Out, report.Text())
-
-	if exportPath != "" {
-		if err := writeTextFile(exportPath, report.Text()); err != nil {
-			return reportError(io, "saving the report", err)
-		}
-		fmt.Fprintf(io.Out, "\nReport saved to: %s\n", exportPath)
-	}
-
-	if wantBattery {
-		path, err := a.Diag.BatteryReport(ctx, batteryPath)
-		if err != nil {
-			return reportError(io, "generating the battery report", err)
-		}
-		fmt.Fprintf(io.Out, "\nBattery report saved to: %s\n", path)
 	}
 	return ExitOK
 }

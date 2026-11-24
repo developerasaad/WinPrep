@@ -1,6 +1,6 @@
 // Package platform defines the interfaces and typed models that separate
 // WinPrep's business logic from the operating system. Presentation code (CLI
-// and TUI) and domain packages (audit, diagnostics, handover) work against
+// and TUI) and domain packages (audit, persist, handover) work against
 // these interfaces only; the Windows-specific implementations live in
 // internal/windows. In-memory fakes for tests live in internal/platform/fake.
 package platform

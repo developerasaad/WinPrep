@@ -1,16 +1,14 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/developerasaad/winprep/internal/app"
-	"github.com/developerasaad/winprep/internal/diagnostics"
+	"github.com/developerasaad/winprep/internal/audit"
 	"github.com/developerasaad/winprep/internal/handover"
-	"github.com/developerasaad/winprep/internal/textfile"
 )
 
 // View renders the active screen. The alt screen is used so the operator's
@@ -54,47 +52,30 @@ func (m *Model) ruleWidth() int {
 	return w
 }
 
-// renderMenu draws the main menu: title, fast system header, options.
+// renderMenu draws the main menu: title, fast readiness header, options.
 func (m *Model) renderMenu() string {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render("WinPrep"))
 	b.WriteString(strings.Repeat(" ", maxInt(1, m.ruleWidth()-len("WinPrep")-len(app.Version))))
 	b.WriteString(styleDim.Render("v" + app.Version))
 	b.WriteString("\n")
-	b.WriteString(styleDim.Render("Windows laptop preparation"))
+	b.WriteString(styleDim.Render("Windows preparation"))
 	b.WriteString("\n\n")
 
 	if !m.headerShown {
 		if m.loading {
-			b.WriteString(styleDim.Render("System: checking..."))
+			b.WriteString(styleDim.Render("Status: checking..."))
 			b.WriteString("\n")
 		}
 	} else if m.headerErr != nil {
-		b.WriteString(styleError.Render("System: could not read (" + m.headerErr.Error() + ")"))
+		b.WriteString(styleError.Render("Status: could not read (" + m.headerErr.Error() + ")"))
 		b.WriteString("\n")
 	} else {
-		name := m.header.Info.OSName
-		if name == "" {
-			name = "(unknown)"
-		}
-		b.WriteString("System:  " + name + "\n")
-		mode := m.header.Audit.State.Short()
-		style := styleNormal
-		switch m.header.Audit.State {
-		case 2: // audit.StateAuditMode
-			style = styleOK
-		case 4, 5: // StateUncertain, StateUnknown
-			style = styleWarn
-		}
-		b.WriteString("Mode:    " + style.Render(mode) + "\n")
-		if m.header.User.Name != "" {
-			priv := "Not elevated"
-			stylep := styleWarn
-			if m.header.User.IsElevated {
-				priv = "Running as administrator"
-				stylep = styleOK
-			}
-			b.WriteString("Session: " + m.header.User.Name + " - " + stylep.Render(priv) + "\n")
+		b.WriteString("Current mode: " + modeStyle(m.header.Audit.State).Render(m.header.Audit.State.Short()) + "\n")
+		if m.header.ReadyForDemo {
+			b.WriteString("Status: " + styleOK.Render("Ready for display") + "\n")
+		} else {
+			b.WriteString("Status: " + styleWarn.Render("Not ready for display") + "\n")
 		}
 	}
 	b.WriteString("\n")
@@ -113,6 +94,19 @@ func (m *Model) renderMenu() string {
 	b.WriteString("\n")
 	b.WriteString(styleDim.Render(wrapOne(menuItems[m.cursor].desc, m.ruleWidth())))
 	return b.String()
+}
+
+// modeStyle colors the current-mode line by audit state. Confirmed Audit
+// Mode is the only green state.
+func modeStyle(s audit.State) lipgloss.Style {
+	switch s {
+	case audit.StateAuditMode:
+		return styleOK
+	case audit.StateUncertain, audit.StateUnknown:
+		return styleWarn
+	default:
+		return styleNormal
+	}
 }
 
 // renderScreen draws the titled, scrollable screens.
@@ -148,16 +142,6 @@ func (m *Model) renderScreen() string {
 
 	// Screen-specific interactive rows below the viewport.
 	switch m.screen {
-	case screenCheck:
-		if m.exporting {
-			b.WriteString("\n")
-			b.WriteString(m.exportInput.View())
-			b.WriteString("\n")
-			if m.exportErr != "" {
-				b.WriteString(styleError.Render(m.exportErr))
-				b.WriteString("\n")
-			}
-		}
 	case screenHandover:
 		switch m.phase {
 		case hoConfirm:
@@ -171,29 +155,25 @@ func (m *Model) screenTitle() string {
 	switch m.screen {
 	case screenHelp:
 		return "Help"
-	case screenStatus:
-		return "System information"
-	case screenCheck:
-		return "Check this laptop"
 	case screenPersist:
-		return "Prepare for display"
+		return "Prepare for Display"
 	case screenHandover:
 		switch m.phase {
 		case hoInspect, hoReview:
-			return "Ready for buyer - inspection"
+			return "Clean & Finish - inspection"
 		case hoConfirm:
-			return "Ready for buyer - confirm"
+			return "Clean & Finish - confirm"
 		case hoReseal:
-			return "Ready for buyer - resealing"
+			return "Clean & Finish - finishing"
 		default:
-			return "Ready for buyer - result"
+			return "Clean & Finish - result"
 		}
 	}
 	return "WinPrep"
 }
 
 // renderConfirm draws the deliberate-confirmation choice. The safe option is
-// selected by default; "Yes" must be chosen on purpose.
+// selected by default; "Proceed" must be chosen on purpose.
 func (m *Model) renderConfirm() string {
 	var b strings.Builder
 	b.WriteString("\n")
@@ -209,7 +189,7 @@ func (m *Model) renderConfirm() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	choices := []string{"No, go back (nothing happens)", "Yes, prepare this laptop for its buyer"}
+	choices := []string{"Cancel (nothing happens)", "Proceed: clean up and prepare for the buyer"}
 	for i, c := range choices {
 		if i == m.confirmChoice {
 			b.WriteString("> " + styleSelected.Render(c) + "\n")
@@ -228,14 +208,9 @@ func (m *Model) footerHint() string {
 		}
 		return "Please wait"
 	}
-	if m.exporting {
-		return "ENTER Save   ESC Cancel"
-	}
 	switch m.screen {
 	case screenMenu:
 		return "UP/DOWN Move   ENTER Select   CTRL+C Exit"
-	case screenCheck:
-		return "E Export report   B Battery report   UP/DOWN Scroll   ESC Back"
 	case screenHandover:
 		switch m.phase {
 		case hoReview:
@@ -255,18 +230,18 @@ func (m *Model) footerHint() string {
 	}
 }
 
-// handoverWarning is the step-5 confirmation text shown before the reseal.
+// handoverWarning is the confirmation text shown before the handover runs.
 func handoverWarning() string {
 	return strings.Join([]string{
 		"You are about to prepare this laptop for handover to a buyer.",
 		"",
-		"  - Windows will be resealed into first-time setup (OOBE) and the laptop",
-		"    is expected to shut down when Sysprep finishes.",
-		"  - The process can fail. If it does, WinPrep will report the error and",
-		"    point you to the Sysprep logs; the laptop will not be prepared.",
-		"  - Sysprep does NOT securely erase data. Files, accounts, and traces",
-		"    from your preparation and customer testing remain on the disk. If",
-		"    the laptop must be wiped, do that separately before selling it.",
+		"  - Windows will be resealed into first-time setup (OOBE) and the laptop is",
+		"    expected to shut down when Sysprep finishes.",
+		"  - The process can fail. If it does, WinPrep will report the error and point",
+		"    you to the Sysprep logs; the laptop will not be prepared.",
+		"  - Sysprep does NOT securely erase data. Files, accounts, and traces from",
+		"    your preparation and customer testing remain on the disk. If the laptop",
+		"    must be wiped, do that separately before selling it.",
 		"  - After the handover, start the laptop once yourself and verify that",
 		"    Windows first-time setup appears, before handing it to the buyer.",
 	}, "\n")
@@ -311,7 +286,7 @@ func renderOutcome(cleanup []handover.CleanupResult, cleanupErr error, reseal ha
 		lines = append(lines, "  "+cleanupErr.Error())
 		lines = append(lines, "",
 			"The reseal was NOT started. Resolve the cleanup problem and run",
-			"\"Ready for buyer\" again.")
+			"\"Clean & Finish\" again.")
 		return lines
 	}
 	if len(cleanup) == 0 {
@@ -356,41 +331,6 @@ func renderOutcome(cleanup []handover.CleanupResult, cleanupErr error, reseal ha
 	return lines
 }
 
-// renderDiagnostics formats the diagnostic report for the TUI, with a note
-// when information was unavailable.
-func renderDiagnostics(r diagnostics.Report, err error, batteryNote string) string {
-	if err != nil {
-		return "The diagnostics could not complete:\n\n  " + err.Error() +
-			"\n\nNothing was changed. Try again; if it keeps failing, report this as a bug."
-	}
-	var lines []string
-	for _, s := range r.Sections {
-		lines = append(lines, styleSectionTitle.Render(s.Title))
-		for _, l := range s.Lines {
-			switch {
-			case l.Available && l.Value != "":
-				lines = append(lines, "  "+styleLabel.Render(pad(l.Label+":", 22))+l.Value)
-			case l.Note != "":
-				lines = append(lines, "  "+styleLabel.Render(pad(l.Label+":", 22))+styleDim.Render(l.Note))
-			default:
-				lines = append(lines, "  "+styleLabel.Render(pad(l.Label+":", 22))+styleDim.Render("(not available)"))
-			}
-		}
-		lines = append(lines, "")
-	}
-	if !r.AllAvailable() {
-		lines = append(lines, styleDim.Render("Some information was unavailable; the notes above explain why. Missing"))
-		lines = append(lines, styleDim.Render("information is not proof of a fault, and a successful query is not proof"))
-		lines = append(lines, styleDim.Render("of health. This check does not replace a physical inspection."))
-		lines = append(lines, "")
-	}
-	if batteryNote != "" {
-		lines = append(lines, batteryNote)
-		lines = append(lines, "")
-	}
-	return strings.Join(lines, "\n")
-}
-
 // helpText is the help screen. It mirrors the CLI help where practical.
 func helpText() string {
 	return strings.Join([]string{
@@ -400,21 +340,21 @@ func helpText() string {
 		"",
 		"  1. Install Windows and enter Audit Mode before finishing first-time",
 		"     setup (press Ctrl+Shift+F3 on the setup screen).",
-		"  2. Install drivers and get the laptop ready; use \"Prepare for display\"",
+		"  2. Install drivers and get the laptop ready; use \"Prepare for Display\"",
 		"     to verify it stays demonstrable. Audit Mode survives restarts and",
 		"     shutdowns on its own - WinPrep adds no persistence tricks.",
 		"  3. Let customers test the laptop freely.",
-		"  4. Before the sale, use \"Check this laptop\" for a read-only health",
-		"     report, and \"Ready for buyer\" to reseal Windows into first-time",
-		"     setup. The laptop shuts down; the buyer completes Windows setup.",
+		"  4. Before the sale, use \"Clean & Finish\" to clean the approved",
+		"     demonstration data and reseal Windows into first-time setup. The",
+		"     laptop shuts down; the buyer completes Windows setup.",
 		"",
 		"What WinPrep does NOT do:",
 		"",
 		"  - It is not a factory reset and not a secure erase. Resealing Windows",
 		"    with Sysprep leaves existing files and accounts on the disk. Wipe",
 		"    the disk separately if the data must be gone.",
-		"  - It does not remove accounts or delete personal files, and it does",
-		"    not install or update drivers.",
+		"  - It does not remove user accounts and does not install or update",
+		"    drivers.",
 		"  - It never disables Windows security features.",
 		"",
 		"Security note:",
@@ -432,8 +372,8 @@ func helpText() string {
 		"  Y/N       Confirm or reject at warnings",
 		"  CTRL+C    Exit (blocked while Sysprep runs)",
 		"",
-		"The same operations are available as commands (winprep status,",
-		"winprep persist, winprep check, winprep clean) for scripted use.",
+		"The same operations are available as commands (winprep persist,",
+		"winprep clean) for scripted use.",
 	}, "\n")
 }
 
@@ -449,31 +389,4 @@ func wrapLines(lines []string, width int) []string {
 // wrapOne wraps a single string into one joined line.
 func wrapOne(s string, width int) string {
 	return strings.Join(wrap(s, width), "\n")
-}
-
-// pad right-pads s with spaces to n characters.
-func pad(s string, n int) string {
-	if len(s) >= n {
-		return s
-	}
-	return s + strings.Repeat(" ", n-len(s))
-}
-
-// defaultExportPath suggests where to save a report: the user's Desktop when
-// it exists, otherwise the home directory.
-func defaultExportPath(name string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return name
-	}
-	desktop := filepath.Join(home, "Desktop")
-	if info, err := os.Stat(desktop); err == nil && info.IsDir() {
-		return filepath.Join(desktop, name)
-	}
-	return filepath.Join(home, name)
-}
-
-// writeReport saves a report file via the shared text writer.
-func writeReport(path, content string) error {
-	return textfile.Write(path, content)
 }
