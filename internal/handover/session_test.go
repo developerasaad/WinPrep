@@ -177,12 +177,10 @@ func TestCleanupFailureBlocksResealing(t *testing.T) {
 	}
 	session.Approve()
 
-	// The folder becomes read-only after planning, so removals fail during
-	// execution - simulating a program holding the files open.
-	if err := os.Chmod(downloads, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(downloads, 0o700) })
+	// A program holds files in the folder open after planning, so removals
+	// fail during execution.
+	undo := makeUndeletable(t, downloads)
+	t.Cleanup(undo)
 
 	res, err := session.Execute(context.Background())
 	if err != nil {
@@ -198,10 +196,8 @@ func TestCleanupFailureBlocksResealing(t *testing.T) {
 		t.Error("the report must say the reseal was not started")
 	}
 
-	// After the condition clears, a fresh session completes the job.
-	if err := os.Chmod(downloads, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// After the program lets go, a fresh session completes the job.
+	undo()
 	session2, err := c.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)

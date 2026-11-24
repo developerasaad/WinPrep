@@ -162,12 +162,11 @@ func TestExecuteFailureBlocksCompletionAndRetries(t *testing.T) {
 	plan := makeContentsPlan(t, "one.txt", filepath.Join("sub", "two.txt"))
 	root := plan.DemoTargets[0].Root
 
-	// Removing entries of a read-only directory fails on every platform the
-	// tests run on: listing works, unlinking does not.
-	if err := os.Chmod(root, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	// A holder keeps one entry undeletable: a read-only directory on Unix,
+	// an open handle without sharing on Windows. This mirrors a running
+	// program holding demonstration files open.
+	undo := makeUndeletable(t, root)
+	t.Cleanup(undo)
 
 	res := ExecutePlan(plan)
 	if res.Complete {
@@ -180,11 +179,9 @@ func TestExecuteFailureBlocksCompletionAndRetries(t *testing.T) {
 		t.Error("the report must say the reseal is blocked")
 	}
 
-	// After the condition is resolved, the same plan executes and completes:
+	// After the holder lets go, the same plan executes and completes:
 	// removals treat already-missing entries as done, so a retry is safe.
-	if err := os.Chmod(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	undo()
 	res = ExecutePlan(plan)
 	if !res.Complete {
 		t.Fatalf("retry must complete: %v", res.TargetResults)
