@@ -73,7 +73,8 @@ func (f *Flow) Gather(ctx context.Context) (Facts, error) {
 	facts.Accounts, facts.AccountsErr = f.listAccounts(ctx)
 	facts.Profiles, facts.ProfilesErr, facts.OrphanDirs = f.listProfiles()
 	facts.SysprepPresent, facts.SysprepErr = f.checkSysprep()
-	facts.SysprepRunning, facts.ProcsErr = f.checkSysprepRunning(ctx)
+	facts.ProcessNames, facts.ProcsErr = f.Procs.ProcessNames(ctx)
+	facts.SysprepRunning = processRunning(facts.ProcessNames, "sysprep.exe")
 	facts.PendingCBSReboot, facts.PendingWUReboot, facts.PendingFileRename, facts.RebootErr = f.readRebootState()
 	if m, err := f.Store.Load(); err != nil {
 		facts.ArtifactsErr = err
@@ -162,19 +163,6 @@ func (f *Flow) checkSysprep() (bool, error) {
 		return false, nil
 	}
 	return true, nil
-}
-
-func (f *Flow) checkSysprepRunning(ctx context.Context) (bool, error) {
-	names, err := f.Procs.ProcessNames(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, n := range names {
-		if strings.EqualFold(n, "sysprep.exe") {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (f *Flow) readRebootState() (cbs, wu, fileRename bool, err error) {

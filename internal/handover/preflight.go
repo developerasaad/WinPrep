@@ -100,6 +100,7 @@ type Facts struct {
 	SysprepPresent    bool
 	SysprepErr        error
 	SysprepRunning    bool
+	ProcessNames      []string
 	ProcsErr          error
 	PendingCBSReboot  bool
 	PendingWUReboot   bool
