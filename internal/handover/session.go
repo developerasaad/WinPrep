@@ -31,6 +31,10 @@ type Session struct {
 	Plan *CleanupPlan
 
 	approved bool
+	// resealInitiated records that Execute ended with the reseal under way,
+	// which keeps the operation lock held until the process exits (the
+	// machine is shutting down at that point).
+	resealInitiated bool
 }
 
 // Begin inspects the machine and constructs the cleanup plan. It changes
@@ -196,6 +200,11 @@ func (r Result) SummaryLines() []string {
 // machine untouched. An error return means WinPrep itself failed (it could
 // not re-read the machine state or acquire the operation lock); workflow
 // outcomes - including every refusal - are values of Result.
+//
+// The operation lock is released again whenever the run ends without a
+// reseal, so the operator can retry from the same window after fixing what
+// failed; once the reseal is initiated the machine is shutting down and the
+// lock stays held.
 func (s *Session) Execute(ctx context.Context) (Result, error) {
 	if !s.approved {
 		return Result{Phase: PhaseCancelled,
@@ -206,6 +215,7 @@ func (s *Session) Execute(ctx context.Context) (Result, error) {
 			Detail: "This session is blocked, so nothing was changed."}, nil
 	}
 
+	locked := false
 	if s.c.Lock != nil {
 		ok, err := s.c.Lock.TryLock()
 		if err != nil {
@@ -213,17 +223,29 @@ func (s *Session) Execute(ctx context.Context) (Result, error) {
 		}
 		if !ok {
 			return Result{Phase: PhaseBusy,
-				Detail: "Another WinPrep process is already cleaning this machine. Let it finish, then try again."}, nil
+				Detail: "Another WinPrep operation is in progress on this machine. Let it finish, then try again."}, nil
 		}
+		locked = true
 	}
+	// Release the lock on every path that does not end in an initiated
+	// reseal, so a retry in the same session is possible. Unlock failures
+	// are not worth failing the report over; the kernel reclaims the mutex
+	// when the process exits either way.
+	defer func() {
+		if locked && !s.resealInitiated && s.c.Lock != nil {
+			_ = s.c.Lock.Unlock()
+		}
+	}()
 
 	// While the approved operation runs, an interrupt must not masquerade as
 	// a clean cancellation: a deletion interrupted midway must still produce
-	// a report, and Sysprep must never be killed once started. The run is
-	// short; closing the window outright remains possible, and the cleanup
-	// is retryable for exactly that case.
-	signal.Ignore(os.Interrupt)
-	defer signal.Reset(os.Interrupt)
+	// a report, and Sysprep must never be killed once started. Registering
+	// our own channel (never read) suppresses the default exit behavior for
+	// the duration; signal.Stop removes exactly this registration, leaving
+	// any other component's handler untouched.
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt)
+	defer signal.Stop(interrupted)
 
 	// Revalidation: gather fresh facts and refuse to act on stale ones.
 	facts, err := s.c.Gather(ctx)
@@ -240,11 +262,30 @@ func (s *Session) Execute(ctx context.Context) (Result, error) {
 		return Result{Phase: PhaseConditionsChanged,
 			Detail: "WinPrep is no longer running with administrative privileges, so nothing was modified."}, nil
 	}
+	if facts.ProcsErr != nil {
+		// The process list is the only way to guarantee no Sysprep process
+		// is alive; an unreadable list means the overlap guarantee cannot
+		// be given, so the run stops here. Failing closed.
+		return Result{Phase: PhaseConditionsChanged,
+			Detail: "The running-process list could not be read, so WinPrep cannot guarantee that no " +
+				"Sysprep operation is active. Nothing was modified. " + facts.ProcsErr.Error()}, nil
+	}
 	if facts.SysprepRunning {
 		return Result{Phase: PhaseConditionsChanged,
 			Detail: "The System Preparation Tool window is still open. Close it, then run \"Clean & Finish\" again; " +
 				"WinPrep never launches Sysprep while another Sysprep process exists."}, nil
 	}
+
+	// The full preflight evaluation is re-run on the fresh facts. Attention
+	// items were reviewed when the operator confirmed, but a new blocker -
+	// an account that appeared, a pending servicing restart, an active
+	// Sysprep log burst - must stop the handover before anything is deleted.
+	if verdict := EvaluateVerdict(BuildChecks(facts)); verdict == VerdictBlocked {
+		return Result{Phase: PhaseConditionsChanged,
+			Detail: "A condition that blocks the handover appeared since the plan was approved, so nothing " +
+				"was modified. Run \"Clean & Finish\" again to see the updated inspection."}, nil
+	}
+
 	replan, err := s.c.BuildCleanupPlan(facts, selfPath())
 	if err != nil {
 		return Result{Phase: PhaseConditionsChanged,
@@ -261,8 +302,11 @@ func (s *Session) Execute(ctx context.Context) (Result, error) {
 				"Run \"Clean & Finish\" again to review the new plan."}, nil
 	}
 
-	// The approved cleanup, exactly as confirmed.
-	cleanup := ExecutePlan(*s.Plan)
+	// The approved cleanup. The operator confirmed a set of locations, not a
+	// frozen file list: the revalidated plan operates on the same roots, and
+	// files that appeared inside an approved location since the confirmation
+	// are covered by that confirmation.
+	cleanup := ExecutePlan(replan)
 	if !cleanup.Complete {
 		return Result{Phase: PhaseCleanupFailed, Cleanup: cleanup,
 			Detail: "The reseal was NOT started because the cleanup did not complete."}, nil
@@ -275,6 +319,7 @@ func (s *Session) Execute(ctx context.Context) (Result, error) {
 	}
 	switch reseal.Outcome {
 	case ResealInitiated:
+		s.resealInitiated = true
 		return Result{Phase: PhaseResealInitiated, Cleanup: cleanup, Reseal: reseal}, nil
 	case ResealSysprepError:
 		return Result{Phase: PhaseResealSysprepError, Cleanup: cleanup, Reseal: reseal}, nil

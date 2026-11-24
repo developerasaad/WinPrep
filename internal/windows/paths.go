@@ -24,21 +24,26 @@ func SysprepPath() (string, error) {
 }
 
 // DataDir returns the directory where WinPrep keeps its managed-artifact
-// manifest (%ProgramData%\WinPrep). It creates the directory if needed; that
-// is one of the very few things WinPrep writes outside its own process.
+// manifest (%ProgramData%\WinPrep). The directory is only created when
+// something is actually written there (see artifacts.Store.Save), so running
+// read-only commands - including clean --dry-run - does not modify the
+// system.
 func DataDir() (string, error) {
 	base := os.Getenv("ProgramData")
 	if base == "" {
 		base = `C:\ProgramData`
 	}
-	dir := filepath.Join(base, "WinPrep")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return dir, nil
+	return filepath.Join(base, "WinPrep"), nil
 }
 
-// UsersDir returns the profiles root (typically C:\Users).
+// UsersDir returns the profiles root (typically C:\Users), or an empty
+// string when SystemDrive is not set. The handover treats an empty root as
+// "orphaned-profile scan unavailable" and reports it, rather than scanning
+// an arbitrary relative path.
 func UsersDir() string {
-	return filepath.Join(os.Getenv("SystemDrive"), "Users")
+	drive := os.Getenv("SystemDrive")
+	if drive == "" {
+		return ""
+	}
+	return filepath.Join(drive, "Users")
 }

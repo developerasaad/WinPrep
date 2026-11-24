@@ -71,7 +71,14 @@ func (s *Service) Inspect(ctx context.Context) (Report, error) {
 	}
 
 	procs, procsErr := s.Procs.ProcessNames(ctx)
-	if procsErr == nil {
+	switch {
+	case procsErr != nil:
+		// The Sysprep-window note could not be checked; say so instead of
+		// presenting an unverified absence as a result.
+		r.Explanation = append(r.Explanation,
+			"Note: the running-process list could not be read ("+procsErr.Error()+"), so whether the "+
+				"System Preparation Tool window is open was not checked.")
+	default:
 		for _, p := range procs {
 			if equalFoldASCII(p, "sysprep.exe") {
 				r.SysprepWindowOpen = true

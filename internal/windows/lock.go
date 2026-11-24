@@ -11,12 +11,12 @@ import (
 // InstanceLock implements platform.InstanceLock with a named kernel mutex in
 // the Global namespace, so it is visible across sessions and wins even when
 // two operators run WinPrep from different consoles. The handle is owned by
-// the process and released by the kernel when it exits, which is the behavior
-// the operation controller needs: a crashed run never leaves a stale lock
-// behind.
+// the process and released by the kernel when it exits, so a crashed run
+// never leaves a stale lock behind; a run that finishes without resealing
+// releases it explicitly so the operator can retry in the same session.
 type InstanceLock struct {
 	name string
-	// handle keeps the mutex alive for the process lifetime once acquired.
+	// handle keeps the mutex alive until Unlock or process exit.
 	handle windows.Handle
 	held   bool
 }
@@ -48,4 +48,20 @@ func (l *InstanceLock) TryLock() (bool, error) {
 	default:
 		return false, err
 	}
+}
+
+// Unlock implements platform.InstanceLock. Releasing a lock this process
+// never acquired is a no-op, mirroring the fake used in tests.
+func (l *InstanceLock) Unlock() error {
+	if !l.held || l.handle == 0 {
+		return nil
+	}
+	if err := windows.ReleaseMutex(l.handle); err != nil {
+		return err
+	}
+	if err := windows.CloseHandle(l.handle); err != nil {
+		return err
+	}
+	l.handle, l.held = 0, false
+	return nil
 }

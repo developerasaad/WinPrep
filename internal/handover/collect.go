@@ -2,7 +2,9 @@ package handover
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -135,9 +137,15 @@ func (c *Controller) listProfiles() (extra []ProfileFact, profilesErr error, orp
 		registered = append(registered, ProfileFact{SID: sid, Path: path})
 	}
 
+	if c.UsersDir == "" {
+		// Without the profiles root the orphan scan cannot run; report it
+		// rather than silently scanning (or skipping) the wrong directory.
+		return nil, errors.New("the profiles root could not be determined (SystemDrive is not set)"), nil
+	}
+
 	// Folders under the profiles root that no registered profile claims and
 	// that are not part of the standard set are worth a look before a sale.
-	if c.UsersDir != "" {
+	{
 		entries, err := filepath.Glob(filepath.Join(c.UsersDir, "*"))
 		if err == nil {
 			for _, dir := range entries {
@@ -173,8 +181,15 @@ func isStandardProfileDir(name string) bool {
 }
 
 func (c *Controller) checkSysprep() (bool, error) {
-	if _, err := c.Sysprep.SysprepPath(); err != nil {
-		return false, nil
+	_, err := c.Sysprep.SysprepPath()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Genuinely absent: a blocker with an accurate diagnosis.
+			return false, nil
+		}
+		// Could not verify (unset WINDIR, access denied): an unknown, not
+		// a false "not present".
+		return false, err
 	}
 	return true, nil
 }

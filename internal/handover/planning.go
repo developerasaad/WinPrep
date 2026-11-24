@@ -56,7 +56,7 @@ var reviewFolders = []string{"Desktop", "Documents", "Pictures", "Videos", "Musi
 // BuildCleanupPlan constructs the read-only cleanup proposal from freshly
 // gathered facts. It performs no modification of any kind. selfPath is the
 // path of the running executable (empty when unknown); the planner refuses to
-// approve a plan whose cleanup would delete the running program itselc.
+// approve a plan whose cleanup would delete the running program itself.
 func (c *Controller) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, error) {
 	plan := CleanupPlan{}
 
@@ -224,7 +224,7 @@ func (c *Controller) planBrowser(plan *CleanupPlan, root string, b browserDef, f
 		}
 		if len(extra) > 0 {
 			plan.Notes = append(plan.Notes, b.name+" has additional profiles ("+strings.Join(extra, ", ")+
-				") that the cleanup does not cover. Review them yourselc.")
+				") that the cleanup does not cover. Review them yourself.")
 		}
 	}
 }

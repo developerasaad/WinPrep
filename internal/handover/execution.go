@@ -10,6 +10,10 @@ import (
 // immediately before it is deleted, and reparse points (symlinks, junctions)
 // are removed as links without ever following them, so a redirection swapped
 // in after planning cannot send a deletion outside the approved scope.
+// Directory roots are re-checked for reparse points right before their
+// contents are enumerated, which closes the window where a location approved
+// as a real directory could be replaced by a junction while other targets
+// are being cleaned.
 //
 // Execution is deliberately retryable: each target is independent, failures
 // are recorded rather than aborting the run, and the result states plainly
@@ -49,13 +53,12 @@ func executeTarget(t PlanTarget) TargetResult {
 	case kindDataDir:
 		// The data directory contains the manifest itself, so the explicit
 		// paths for this target come from a fresh directory listing.
-		if entries, err := os.ReadDir(t.Root); err == nil {
-			for _, e := range entries {
-				remove(filepath.Join(t.Root, e.Name()))
-			}
-		} else if !os.IsNotExist(err) {
-			tr.Failed = append(tr.Failed, t.Root+": "+err.Error())
+		entries, ok := listDirContents(t.Root, &tr)
+		if !ok {
 			return tr
+		}
+		for _, e := range entries {
+			remove(filepath.Join(t.Root, e.Name()))
 		}
 		if err := os.Remove(t.Root); err != nil && !os.IsNotExist(err) {
 			tr.Failed = append(tr.Failed, t.Root+": "+err.Error())
@@ -64,12 +67,8 @@ func executeTarget(t PlanTarget) TargetResult {
 		}
 
 	case kindDirContents:
-		entries, err := os.ReadDir(t.Root)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return tr // nothing there; nothing to remove
-			}
-			tr.Failed = append(tr.Failed, t.Root+": "+err.Error())
+		entries, ok := listDirContents(t.Root, &tr)
+		if !ok {
 			return tr
 		}
 		for _, e := range entries {
@@ -95,6 +94,41 @@ func executeTarget(t PlanTarget) TargetResult {
 	return tr
 }
 
+// listDirContents opens an approved directory for content removal. It
+// re-validates with Lstat that the root is still a real directory and not a
+// reparse point immediately before enumerating it: os.ReadDir follows
+// junctions, so a root swapped for one after planning must be refused rather
+// than traversed. A missing root is an empty target (nothing to remove);
+// anything else is a failure recorded on the target result.
+func listDirContents(root string, tr *TargetResult) ([]os.DirEntry, bool) {
+	info, err := os.Lstat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, true // nothing there; nothing to remove
+		}
+		tr.Failed = append(tr.Failed, root+": "+err.Error())
+		return nil, false
+	}
+	if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		tr.Failed = append(tr.Failed, root+
+			": the approved location became a symlink or reparse point after planning; refused to follow it")
+		return nil, false
+	}
+	if !info.IsDir() {
+		tr.Failed = append(tr.Failed, root+": the approved location is no longer a directory; refused")
+		return nil, false
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, true
+		}
+		tr.Failed = append(tr.Failed, root+": "+err.Error())
+		return nil, false
+	}
+	return entries, true
+}
+
 // removePath deletes one path. Reparse points are unlinked, never followed;
 // directories are emptied bottom-up. A path that is already absent counts as
 // removed, which keeps a retry after an interruption idempotent.
@@ -106,9 +140,10 @@ func removePath(path string) error {
 		}
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		// A symlink or junction: delete the link only. The executor never
-		// follows it, so the link target is untouched wherever it points.
+	if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		// A symlink, junction, or other reparse point: delete the link only.
+		// The executor never follows it, so the link target is untouched
+		// wherever it points.
 		return os.Remove(path)
 	}
 	if !info.IsDir() {
@@ -117,10 +152,29 @@ func removePath(path string) error {
 	return removeTree(path)
 }
 
-// removeTree recursively deletes a real directory (not a reparse point).
+// removeTree recursively deletes a real directory (not a reparse point). The
+// directory is re-checked with Lstat right before it is enumerated, for the
+// same reason listDirContents re-checks the target roots.
 func removeTree(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		// It became a link since the caller's check; unlink it, do not follow.
+		return os.Remove(dir)
+	}
+	if !info.IsDir() {
+		return os.Remove(dir)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	for _, e := range entries {
@@ -151,6 +205,11 @@ func verifyPlan(plan CleanupPlan) bool {
 				}
 			case kindDirContents:
 				entries, err := os.ReadDir(t.Root)
+				if os.IsNotExist(err) {
+					// The target directory is gone entirely, so the goal
+					// state - nothing left in it to remove - already holds.
+					continue
+				}
 				if err != nil || len(entries) > 0 {
 					ok = false
 				}
