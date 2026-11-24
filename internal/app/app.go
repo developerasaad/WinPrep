@@ -26,7 +26,7 @@ type App struct {
 // exported so tests (and any future non-Windows assembly) can construct a
 // fully wired App from fake or alternative implementations.
 func Assemble(sys platform.System, reg platform.Registry, run platform.Runner, procs platform.ProcessLister,
-	store *artifacts.Store, psPath, sysprepPath string, sysprep handover.SysprepRunner, usersDir string) *App {
+	store *artifacts.Store, sysprep handover.SysprepRunner, usersDir string) *App {
 
 	a := &App{
 		System:   sys,
@@ -39,12 +39,10 @@ func Assemble(sys platform.System, reg platform.Registry, run platform.Runner, p
 	a.Handover = &handover.Flow{
 		Sys:      sys,
 		Reg:      reg,
-		Run:      run,
 		Procs:    procs,
 		Audit:    a.Audit,
 		Store:    store,
 		Sysprep:  sysprep,
-		PSPath:   psPath,
 		UsersDir: usersDir,
 	}
 	return a

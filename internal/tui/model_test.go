@@ -9,7 +9,6 @@ import (
 
 	"github.com/developerasaad/winprep/internal/apptest"
 	"github.com/developerasaad/winprep/internal/handover"
-	"github.com/developerasaad/winprep/internal/platform"
 )
 
 // press simulates a key press and returns the command it produced. The
@@ -255,7 +254,7 @@ func TestHandoverBlockedRefusesToContinue(t *testing.T) {
 
 func TestHandoverSysprepErrorShowsLogs(t *testing.T) {
 	m, f := newModel(t)
-	f.Sysprep.Res = platform.CommandResult{ExitCode: 1}
+	f.Sysprep.ExitCode = 1
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})

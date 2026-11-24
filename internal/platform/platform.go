@@ -61,30 +61,21 @@ type Registry interface {
 	SubKeyNames(root RootKey, path string) ([]string, error)
 }
 
-// CommandResult holds the captured output of an external command that has
-// finished (or been cancelled). A non-zero ExitCode is not itself an error;
-// callers interpret it.
-type CommandResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-}
-
-// Runner executes external programs using explicit argument arrays. There is
-// deliberately no shell involved: arguments are passed verbatim, which rules
-// out injection through paths or other user-supplied values.
+// Runner executes the single external program WinPrep is allowed to launch:
+// Sysprep during the handover. Arguments are passed as an argument vector;
+// there is deliberately no shell involved, which rules out injection through
+// paths or other user-supplied values.
 type Runner interface {
-	// Run executes a command with its console window hidden (where the
-	// platform distinguishes) and captures combined output. It is intended for
-	// helper programs such as powershell.exe whose output is parsed.
-	Run(ctx context.Context, name string, args ...string) (CommandResult, error)
 	// RunVisible executes a command that is allowed to show windows and
-	// interact with the user, such as the Sysprep GUI.
-	RunVisible(ctx context.Context, name string, args ...string) (CommandResult, error)
+	// interact with the user, such as the Sysprep GUI. It returns the
+	// process exit code; err is non-nil only when the command could not
+	// be started or waited for, which is a failure to run, not a
+	// reportable command outcome.
+	RunVisible(ctx context.Context, name string, args ...string) (exitCode int, err error)
 }
 
-// SystemInfo carries the fast, targeted system facts WinPrep shows in the main
-// menu header and the status command. It is assembled from registry reads and
+// SystemInfo carries the fast, targeted system facts WinPrep needs to judge
+// whether a handover is possible. It is assembled from registry reads and
 // native calls only, so it can be collected without spawning processes.
 type SystemInfo struct {
 	OSName           string // e.g. "Windows 11 Pro"
@@ -113,10 +104,26 @@ type UserInfo struct {
 	IsBuiltinAdmin bool   // SID ends in -500
 }
 
-// System collects basic system and user facts using targeted queries.
+// LocalAccount is one local user account on the machine. RID is the relative
+// identifier, the final component of the SID; the built-in accounts
+// (Administrator 500, Guest 501, and the 501-599 well-known range) live below
+// 1000, so RID >= 1000 marks an account someone created.
+type LocalAccount struct {
+	Name     string
+	SID      string
+	RID      uint32
+	Disabled bool
+}
+
+// System collects basic system, user, and account facts using targeted
+// native queries. No method spawns external programs.
 type System interface {
 	SystemInfo(ctx context.Context) (SystemInfo, error)
 	UserInfo(ctx context.Context) (UserInfo, error)
+	// LocalAccounts lists the local user accounts with their SIDs. The
+	// Windows implementation uses the Net* SAM APIs rather than parsing
+	// the localized output of a command-line tool.
+	LocalAccounts(ctx context.Context) ([]LocalAccount, error)
 }
 
 // ProcessLister reports the names of running processes. WinPrep uses it to

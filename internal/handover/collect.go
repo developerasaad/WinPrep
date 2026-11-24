@@ -2,7 +2,6 @@ package handover
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -20,39 +19,17 @@ const (
 	sessionMgrKey  = `SYSTEM\CurrentControlSet\Control\Session Manager`
 )
 
-// accountsScript enumerates local accounts through CIM. Property names in the
-// JSON output are language-neutral, which is why this beats parsing net user.
-const accountsScript = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$ErrorActionPreference = 'SilentlyContinue'
-[pscustomobject]@{
-  accounts = @(Get-CimInstance -ClassName Win32_UserAccount -Filter 'LocalAccount=True' | ForEach-Object {
-    [pscustomobject]@{ Name = [string]$_.Name; SID = [string]$_.SID; Disabled = [bool]$_.Disabled }
-  })
-} | ConvertTo-Json -Depth 3`
-
-type rawAccounts struct {
-	Accounts []struct {
-		Name     string `json:"Name"`
-		SID      string `json:"SID"`
-		Disabled bool   `json:"Disabled"`
-	} `json:"accounts"`
-}
-
 // Flow wires the platform services into the handover steps. Both the CLI and
 // the TUI drive the same Flow; there is exactly one implementation of the
 // handover procedure.
 type Flow struct {
 	Sys     platform.System
 	Reg     platform.Registry
-	Run     platform.Runner
 	Procs   platform.ProcessLister
 	Audit   *audit.Service
 	Store   *artifacts.Store
 	Sysprep SysprepRunner
 
-	// PSPath is the absolute path of powershell.exe used for the account
-	// query. Injected so tests never spawn anything.
-	PSPath string
 	// UsersDir is the profiles root used to find orphan profile folders.
 	UsersDir string
 }
@@ -107,23 +84,16 @@ func (f *Flow) Gather(ctx context.Context) (Facts, error) {
 }
 
 func (f *Flow) listAccounts(ctx context.Context) ([]AccountFact, error) {
-	res, err := f.Run.Run(ctx, f.PSPath, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", accountsScript)
+	accounts, err := f.Sys.LocalAccounts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("querying local accounts: %w", err)
 	}
-	if res.ExitCode != 0 {
-		return nil, fmt.Errorf("querying local accounts: powershell exited with code %d", res.ExitCode)
-	}
-	var raw rawAccounts
-	if err := json.Unmarshal([]byte(res.Stdout), &raw); err != nil {
-		return nil, fmt.Errorf("parsing account query output: %w", err)
-	}
 	// Only accounts with a relative identifier of 1000 or higher are
-	// "extra"; the built-in accounts (500 Administrator, 501 Guest, and the
-	// 501-599 well-known range) are expected on every installation.
+	// "extra"; the built-in accounts (500 Administrator, 501 Guest, and
+	// the 501-599 well-known range) are expected on every installation.
 	var extra []AccountFact
-	for _, a := range raw.Accounts {
-		if sidRID(a.SID) >= 1000 {
+	for _, a := range accounts {
+		if a.RID >= 1000 {
 			extra = append(extra, AccountFact{Name: a.Name, SID: a.SID, Disabled: a.Disabled})
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/developerasaad/winprep/internal/audit"
@@ -127,6 +128,32 @@ func TestProcessListingIncludesSelf(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the test process should appear in the process list; got %d names", len(names))
+	}
+}
+
+func TestLocalAccountsFromRealMachine(t *testing.T) {
+	sys := windows.NewSystem(windows.NewRegistry())
+	accounts, err := sys.LocalAccounts(context.Background())
+	if err != nil {
+		t.Fatalf("LocalAccounts: %v", err)
+	}
+	if len(accounts) == 0 {
+		t.Fatal("a Windows installation must have local accounts")
+	}
+	haveAdmin := false
+	for _, a := range accounts {
+		if a.Name == "" {
+			t.Error("every account should carry a name")
+		}
+		if !strings.HasPrefix(a.SID, "S-1-5-") || a.RID == 0 {
+			t.Errorf("account %q has an unusable SID %q (RID %d)", a.Name, a.SID, a.RID)
+		}
+		if a.RID == 500 {
+			haveAdmin = true
+		}
+	}
+	if !haveAdmin {
+		t.Error("the built-in Administrator (RID 500) should be listed")
 	}
 }
 

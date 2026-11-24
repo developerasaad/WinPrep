@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/developerasaad/winprep/internal/apptest"
-	"github.com/developerasaad/winprep/internal/platform"
 )
 
 // newIO returns a CLI IO pair with captured output.
@@ -102,8 +101,8 @@ func TestCleanDryRunChangesNothing(t *testing.T) {
 	if f.Sysprep.Called {
 		t.Error("dry run must never invoke Sysprep")
 	}
-	if len(f.Run.Commands) == 0 {
-		t.Error("the inspection should still have run")
+	if f.Run.Calls() != 0 {
+		t.Error("the inspection must not spawn any processes")
 	}
 }
 
@@ -178,7 +177,7 @@ func TestCleanConfirmedRunsSysprep(t *testing.T) {
 
 func TestCleanSysprepErrorShowsLogs(t *testing.T) {
 	f := apptest.New(t.TempDir())
-	f.Sysprep.Res = platform.CommandResult{ExitCode: 1, Stderr: "sysexe error"}
+	f.Sysprep.ExitCode = 1
 	io, out, _ := newIO("", false)
 	code := Run(t.Context(), f.App, io, []string{"clean", "--yes"})
 	if code != ExitFail {

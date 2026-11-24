@@ -23,17 +23,6 @@ func SysprepPath() (string, error) {
 	return p, nil
 }
 
-// PowerShellPath returns the full path of Windows PowerShell 5.1, which ships
-// with every supported Windows 10/11 installation. WinPrep does not depend on
-// PowerShell 7.
-func PowerShellPath() string {
-	windir := os.Getenv("WINDIR")
-	if windir == "" {
-		return "powershell.exe"
-	}
-	return filepath.Join(windir, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-}
-
 // DataDir returns the directory where WinPrep keeps its managed-artifact
 // manifest (%ProgramData%\WinPrep). It creates the directory if needed; that
 // is one of the very few things WinPrep writes outside its own process.

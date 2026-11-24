@@ -53,6 +53,12 @@ func (f *fakeSystem) UserInfo(context.Context) (platform.UserInfo, error) {
 	return f.usr, nil
 }
 
+// LocalAccounts satisfies the platform.System interface. The audit service
+// never queries accounts, so the stub is deliberately empty.
+func (f *fakeSystem) LocalAccounts(context.Context) ([]platform.LocalAccount, error) {
+	return nil, nil
+}
+
 func adminUser() platform.UserInfo {
 	return platform.UserInfo{
 		Name:           `WKS\Administrator`,

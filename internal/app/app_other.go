@@ -24,8 +24,6 @@ func New() *App {
 		&stubRunner{},
 		&stubProcessLister{},
 		artifacts.NewStore("."),
-		"powershell.exe",
-		"",
 		&stubSysprep{},
 		"",
 	)
@@ -39,6 +37,10 @@ func (s *stubSystem) SystemInfo(context.Context) (platform.SystemInfo, error) {
 
 func (s *stubSystem) UserInfo(context.Context) (platform.UserInfo, error) {
 	return platform.UserInfo{}, platform.ErrUnsupportedPlatform
+}
+
+func (s *stubSystem) LocalAccounts(context.Context) ([]platform.LocalAccount, error) {
+	return nil, platform.ErrUnsupportedPlatform
 }
 
 type stubRegistry struct{}
@@ -65,12 +67,8 @@ func (r *stubRegistry) SubKeyNames(platform.RootKey, string) ([]string, error) {
 
 type stubRunner struct{}
 
-func (r *stubRunner) Run(context.Context, string, ...string) (platform.CommandResult, error) {
-	return platform.CommandResult{}, platform.ErrUnsupportedPlatform
-}
-
-func (r *stubRunner) RunVisible(context.Context, string, ...string) (platform.CommandResult, error) {
-	return platform.CommandResult{}, platform.ErrUnsupportedPlatform
+func (r *stubRunner) RunVisible(context.Context, string, ...string) (int, error) {
+	return 0, platform.ErrUnsupportedPlatform
 }
 
 type stubProcessLister struct{}
@@ -85,8 +83,8 @@ func (s *stubSysprep) SysprepPath() (string, error) {
 	return "", errors.New("sysprep is only available on Windows")
 }
 
-func (s *stubSysprep) RunReseal(context.Context) (platform.CommandResult, error) {
-	return platform.CommandResult{}, platform.ErrUnsupportedPlatform
+func (s *stubSysprep) RunReseal(context.Context) (int, error) {
+	return 0, platform.ErrUnsupportedPlatform
 }
 
 // Compile-time check that the handover flow stays constructible with stubs

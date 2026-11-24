@@ -160,97 +160,52 @@ func (r *Registry) SubKeyNames(root platform.RootKey, path string) ([]string, er
 
 // Command records a single invocation made through a Runner.
 type Command struct {
-	Name      string
-	Args      []string
-	Visible   bool
-	Cancelled bool
+	Name    string
+	Args    []string
+	Visible bool
 }
 
 // Runner is an in-memory platform.Runner that records invocations and returns
-// canned results matched by command name.
+// canned exit codes matched by command name.
 type Runner struct {
 	mu       sync.Mutex
 	Commands []Command
-	// Results maps a lowercase command basename (e.g. "powershell.exe") to the
-	// result returned for it. Missing entries produce an error.
-	Results map[string]platform.CommandResult
-	// scriptResults refines Results: when any argument of an invocation
-	// contains the fragment, that result wins. It distinguishes the different
-	// PowerShell queries, which all run through powershell.exe.
-	scriptResults []scriptResult
-	Err           error // returned for every command when set
-}
-
-type scriptResult struct {
-	name     string
-	fragment string
-	res      platform.CommandResult
+	// ExitCodes maps a lowercase command basename (e.g. "sysprep.exe") to
+	// the exit code returned for it. Missing entries produce an error.
+	ExitCodes map[string]int
+	Err       error // returned for every command when set
 }
 
 // NewRunner returns a fake runner that fails for unknown commands.
 func NewRunner() *Runner {
-	return &Runner{Results: map[string]platform.CommandResult{}}
+	return &Runner{ExitCodes: map[string]int{}}
 }
 
-// SetResult installs the result returned for the given command name.
-func (r *Runner) SetResult(name string, res platform.CommandResult) *Runner {
+// SetExitCode installs the exit code returned for the given command name.
+func (r *Runner) SetExitCode(name string, code int) *Runner {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.Results[strings.ToLower(name)] = res
+	r.ExitCodes[strings.ToLower(name)] = code
 	return r
 }
 
-// SetScriptResult installs a result returned when the command's basename
-// matches name and any argument contains fragment. It takes precedence over
-// SetResult, allowing different canned output for different PowerShell
-// scripts.
-func (r *Runner) SetScriptResult(name, fragment string, res platform.CommandResult) *Runner {
+// RunVisible implements platform.Runner.
+func (r *Runner) RunVisible(_ context.Context, name string, args ...string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.scriptResults = append(r.scriptResults, scriptResult{
-		name:     strings.ToLower(name),
-		fragment: fragment,
-		res:      res,
-	})
-	return r
-}
-
-func (r *Runner) run(visible bool, name string, args ...string) (platform.CommandResult, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.Commands = append(r.Commands, Command{Name: name, Args: append([]string(nil), args...), Visible: visible})
+	r.Commands = append(r.Commands, Command{Name: name, Args: append([]string(nil), args...), Visible: true})
 	if r.Err != nil {
-		return platform.CommandResult{}, r.Err
+		return 0, r.Err
 	}
 	base := strings.ToLower(name)
 	if i := strings.LastIndex(base, `\`); i >= 0 {
 		base = base[i+1:]
 	}
-	for _, sr := range r.scriptResults {
-		if sr.name != base {
-			continue
-		}
-		for _, a := range args {
-			if strings.Contains(a, sr.fragment) {
-				return sr.res, nil
-			}
-		}
-	}
-	res, ok := r.Results[base]
+	code, ok := r.ExitCodes[base]
 	if !ok {
-		return platform.CommandResult{}, fmt.Errorf("fake: no result configured for %q", name)
+		return 0, fmt.Errorf("fake: no exit code configured for %q", name)
 	}
-	return res, nil
-}
-
-// Run implements platform.Runner.
-func (r *Runner) Run(_ context.Context, name string, args ...string) (platform.CommandResult, error) {
-	return r.run(false, name, args...)
-}
-
-// RunVisible implements platform.Runner.
-func (r *Runner) RunVisible(_ context.Context, name string, args ...string) (platform.CommandResult, error) {
-	return r.run(true, name, args...)
+	return code, nil
 }
 
 // Calls returns the number of recorded invocations.
@@ -282,6 +237,10 @@ type System struct {
 	Sys platform.SystemInfo
 	Usr platform.UserInfo
 	Err error
+	// Accounts is returned by LocalAccounts; a machine with only the
+	// built-in Administrator is the default fixture shape.
+	Accounts    []platform.LocalAccount
+	AccountsErr error
 }
 
 // SystemInfo implements platform.System.
@@ -298,6 +257,14 @@ func (s *System) UserInfo(context.Context) (platform.UserInfo, error) {
 		return platform.UserInfo{}, s.Err
 	}
 	return s.Usr, nil
+}
+
+// LocalAccounts implements platform.System.
+func (s *System) LocalAccounts(context.Context) ([]platform.LocalAccount, error) {
+	if s.AccountsErr != nil {
+		return nil, s.AccountsErr
+	}
+	return append([]platform.LocalAccount(nil), s.Accounts...), nil
 }
 
 // ProcessLister is a fixed platform.ProcessLister.

@@ -6,7 +6,6 @@ import (
 	"context"
 
 	"github.com/developerasaad/winprep/internal/artifacts"
-	"github.com/developerasaad/winprep/internal/platform"
 	"github.com/developerasaad/winprep/internal/windows"
 )
 
@@ -28,8 +27,6 @@ func New() *App {
 	return Assemble(
 		sys, reg, run, procs,
 		artifacts.NewStore(dataDir),
-		windows.PowerShellPath(),
-		`C:\Windows\System32\Sysprep\Sysprep.exe`,
 		&windowsSysprep{runner: run},
 		windows.UsersDir(),
 	)
@@ -47,10 +44,10 @@ func (s *windowsSysprep) SysprepPath() (string, error) {
 	return windows.SysprepPath()
 }
 
-func (s *windowsSysprep) RunReseal(ctx context.Context) (platform.CommandResult, error) {
+func (s *windowsSysprep) RunReseal(ctx context.Context) (int, error) {
 	path, err := windows.SysprepPath()
 	if err != nil {
-		return platform.CommandResult{}, err
+		return 0, err
 	}
 	return s.runner.RunVisible(ctx, path, "/oobe", "/shutdown")
 }

@@ -3,8 +3,6 @@ package handover
 import (
 	"context"
 	"fmt"
-
-	"github.com/developerasaad/winprep/internal/platform"
 )
 
 // SysprepRunner abstracts the single privileged call WinPrep makes: invoking
@@ -14,10 +12,12 @@ type SysprepRunner interface {
 	// SysprepPath returns the absolute path of Sysprep.exe, or an error if it
 	// cannot be located.
 	SysprepPath() (string, error)
-	// RunReseal runs the documented reseal command. Implementations must run
-	// it with a non-cancellable context: once Sysprep has accepted the
-	// operation it must not be killed by WinPrep.
-	RunReseal(ctx context.Context) (platform.CommandResult, error)
+	// RunReseal runs the documented reseal command and returns the Sysprep
+	// exit code. Implementations must run it with a non-cancellable
+	// context: once Sysprep has accepted the operation it must not be
+	// killed by WinPrep. err is non-nil only when Sysprep could not be
+	// started or waited for.
+	RunReseal(ctx context.Context) (exitCode int, err error)
 }
 
 // ResealOutcome distinguishes exactly what happened, per the seven-step
@@ -83,7 +83,7 @@ func (f *Flow) Reseal(ctx context.Context) (ResealResult, error) {
 		}, nil
 	}
 
-	res, err := f.Sysprep.RunReseal(context.WithoutCancel(ctx))
+	exitCode, err := f.Sysprep.RunReseal(context.WithoutCancel(ctx))
 	if err != nil {
 		return ResealResult{
 			Outcome: ResealLaunchFailed,
@@ -92,7 +92,7 @@ func (f *Flow) Reseal(ctx context.Context) (ResealResult, error) {
 	}
 
 	switch {
-	case res.ExitCode == 0:
+	case exitCode == 0:
 		return ResealResult{
 			Outcome: ResealInitiated,
 			Detail: "Sysprep finished and initiated the shutdown. When the laptop is next switched on, it will start " +
@@ -101,9 +101,9 @@ func (f *Flow) Reseal(ctx context.Context) (ResealResult, error) {
 	default:
 		return ResealResult{
 			Outcome:  ResealSysprepError,
-			ExitCode: res.ExitCode,
+			ExitCode: exitCode,
 			Detail: fmt.Sprintf("Sysprep exited with code %d and the machine was NOT prepared for handover. "+
-				"Windows may show a Sysprep error dialog; dismiss it, then check the logs below.", res.ExitCode),
+				"Windows may show a Sysprep error dialog; dismiss it, then check the logs below.", exitCode),
 		}, nil
 	}
 }

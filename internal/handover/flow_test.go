@@ -17,16 +17,16 @@ import (
 type fakeSysprep struct {
 	path      string
 	pathErr   error
-	result    platform.CommandResult
+	exitCode  int
 	runErr    error
 	ressealed bool
 }
 
 func (s *fakeSysprep) SysprepPath() (string, error) { return s.path, s.pathErr }
 
-func (s *fakeSysprep) RunReseal(context.Context) (platform.CommandResult, error) {
+func (s *fakeSysprep) RunReseal(context.Context) (int, error) {
 	s.ressealed = true
-	return s.result, s.runErr
+	return s.exitCode, s.runErr
 }
 
 // auditReadyRegistry returns a registry that reports a consistent Audit Mode.
@@ -36,7 +36,7 @@ func auditReadyRegistry() *fake.Registry {
 		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe")
 }
 
-func newTestFlowWithRegistry(t *testing.T, reg *fake.Registry) (*Flow, *fake.Runner, *fakeSysprep, *artifacts.Store) {
+func newTestFlowWithRegistry(t *testing.T, reg *fake.Registry) (*Flow, *fake.System, *fakeSysprep, *artifacts.Store) {
 	t.Helper()
 	store := artifacts.NewStore(t.TempDir())
 	sys := &fake.System{
@@ -45,22 +45,21 @@ func newTestFlowWithRegistry(t *testing.T, reg *fake.Registry) (*Flow, *fake.Run
 			InstallationType: "Client", Architecture: "x64", IsWindows: true,
 		},
 		Usr: platform.UserInfo{IsElevated: true, SID: "S-1-5-21-1-2-3-500", IsBuiltinAdmin: true},
+		Accounts: []platform.LocalAccount{
+			{Name: "Administrator", SID: "S-1-5-21-1-2-3-500", RID: 500},
+		},
 	}
-	runner := fake.NewRunner()
-	runner.SetResult("powershell.exe", platform.CommandResult{Stdout: `{"accounts":[]}`})
 	sp := &fakeSysprep{path: `C:\Windows\System32\Sysprep\Sysprep.exe`}
 	flow := &Flow{
 		Sys:      sys,
 		Reg:      reg,
-		Run:      runner,
 		Procs:    &fake.ProcessLister{Names: []string{"winprep.exe"}},
 		Audit:    audit.NewService(reg, sys),
 		Store:    store,
 		Sysprep:  sp,
-		PSPath:   `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
 		UsersDir: filepath.Join(t.TempDir(), "Users"),
 	}
-	return flow, runner, sp, store
+	return flow, sys, sp, store
 }
 
 func TestInspectReadyMachine(t *testing.T) {
@@ -88,8 +87,8 @@ func TestInspectNormalMachineIsBlocked(t *testing.T) {
 }
 
 func TestInspectAccountFailureBlocks(t *testing.T) {
-	flow, runner, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	runner.SetResult("powershell.exe", platform.CommandResult{ExitCode: 1})
+	flow, sys, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
+	sys.AccountsErr = errors.New("access denied")
 	res, err := flow.Inspect(t.Context())
 	if err != nil {
 		t.Fatalf("Inspect() error = %v", err)
@@ -100,10 +99,9 @@ func TestInspectAccountFailureBlocks(t *testing.T) {
 }
 
 func TestInspectDetectsExtraAccounts(t *testing.T) {
-	flow, runner, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	runner.SetResult("powershell.exe", platform.CommandResult{
-		Stdout: `{"accounts":[{"Name":"customer","SID":"S-1-5-21-1-2-3-1001","Disabled":false},{"Name":"Administrator","SID":"S-1-5-21-1-2-3-500","Disabled":false}]}`,
-	})
+	flow, sys, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
+	sys.Accounts = append(sys.Accounts,
+		platform.LocalAccount{Name: "customer", SID: "S-1-5-21-1-2-3-1001", RID: 1001})
 	res, err := flow.Inspect(t.Context())
 	if err != nil {
 		t.Fatalf("Inspect() error = %v", err)
@@ -150,7 +148,7 @@ func TestResealSuccessAndFailures(t *testing.T) {
 
 	// Success: exit code 0 means initiated, and the wording must not claim
 	// final verification.
-	sp.result = platform.CommandResult{ExitCode: 0}
+	sp.exitCode = 0
 	res, err := flow.Reseal(t.Context())
 	if err != nil || res.Outcome != ResealInitiated {
 		t.Fatalf("Reseal() = %+v, %v; want initiated", res, err)
@@ -160,7 +158,7 @@ func TestResealSuccessAndFailures(t *testing.T) {
 	}
 
 	// Sysprep error: exit code non-zero.
-	sp.result = platform.CommandResult{ExitCode: 31}
+	sp.exitCode = 31
 	res, _ = flow.Reseal(t.Context())
 	if res.Outcome != ResealSysprepError || res.ExitCode != 31 {
 		t.Fatalf("Reseal() = %+v; want sysprep error with code 31", res)
@@ -182,9 +180,9 @@ func TestResealSuccessAndFailures(t *testing.T) {
 }
 
 func TestResealNeverInvokedDuringDryRun(t *testing.T) {
-	flow, runner, sp, store := newTestFlowWithRegistry(t, auditReadyRegistry())
-	// A dry run is exactly Inspect + reporting: no cleanup, no sysprep, and
-	// nothing written.
+	flow, _, sp, store := newTestFlowWithRegistry(t, auditReadyRegistry())
+	// A dry run is exactly Inspect + reporting: no cleanup, no sysprep, no
+	// spawned processes, and nothing written.
 	before, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -194,9 +192,6 @@ func TestResealNeverInvokedDuringDryRun(t *testing.T) {
 	}
 	if sp.ressealed {
 		t.Error("dry-run inspection invoked sysprep")
-	}
-	if runner.Calls() > 1 {
-		t.Errorf("inspection ran %d commands; expected only the account query", runner.Calls())
 	}
 	after, err := store.Load()
 	if err != nil {

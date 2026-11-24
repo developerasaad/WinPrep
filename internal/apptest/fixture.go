@@ -14,18 +14,14 @@ import (
 	"github.com/developerasaad/winprep/internal/platform/fake"
 )
 
-// AccountsJSON is the local-account query result for a machine with no extra
-// accounts (only the built-in Administrator, RID 500).
-const AccountsJSON = `{"accounts":[{"Name":"Administrator","SID":"S-1-5-21-1-2-3-500","Disabled":false}]}`
-
 // FakeSysprep is a handover.SysprepRunner for tests. It records the reseal
 // call and returns the configured result.
 type FakeSysprep struct {
-	Path    string
-	PathErr error
-	Res     platform.CommandResult
-	Err     error
-	Called  bool
+	Path     string
+	PathErr  error
+	ExitCode int
+	Err      error
+	Called   bool
 }
 
 // SysprepPath implements handover.SysprepRunner.
@@ -40,9 +36,9 @@ func (s *FakeSysprep) SysprepPath() (string, error) {
 }
 
 // RunReseal implements handover.SysprepRunner.
-func (s *FakeSysprep) RunReseal(context.Context) (platform.CommandResult, error) {
+func (s *FakeSysprep) RunReseal(context.Context) (int, error) {
 	s.Called = true
-	return s.Res, s.Err
+	return s.ExitCode, s.Err
 }
 
 // Fixture is a fully wired App over fakes, plus handles to the fakes so
@@ -89,12 +85,12 @@ func New(dataDir string) *Fixture {
 			Name: `WKS\Administrator`, SID: "S-1-5-21-1-2-3-500",
 			IsElevated: true, IsBuiltinAdmin: true,
 		},
+		Accounts: []platform.LocalAccount{
+			{Name: "Administrator", SID: "S-1-5-21-1-2-3-500", RID: 500},
+		},
 	}
 
 	run := fake.NewRunner()
-	// The account query distinguishes its script by the Win32_UserAccount
-	// fragment.
-	run.SetScriptResult("powershell.exe", "Win32_UserAccount", platform.CommandResult{Stdout: AccountsJSON})
 
 	f := &Fixture{
 		Sys:     sys,
@@ -106,8 +102,6 @@ func New(dataDir string) *Fixture {
 	}
 	f.App = app.Assemble(
 		sys, reg, run, f.Procs, f.Store,
-		"powershell.exe",
-		`C:\Windows\System32\Sysprep\Sysprep.exe`,
 		f.Sysprep,
 		usersDir,
 	)
