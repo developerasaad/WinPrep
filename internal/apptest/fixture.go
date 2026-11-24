@@ -61,7 +61,11 @@ type Fixture struct {
 }
 
 // New returns a fixture whose machine is a plausible Audit Mode laptop:
-// Windows 11 Pro, elevated built-in Administrator, all checks green.
+// Windows 11 Pro, elevated built-in Administrator, all checks green. The
+// registry values mirror what a real Audit Mode installation exposes:
+// ImageState (not the documented-but-unobserved StateName), the AuditBoot
+// flag under SYSTEM\Setup\Status, and a CmdLine that does not carry
+// "audit.exe" (real machines never put it there).
 func New(dataDir string) *Fixture {
 	// The profiles root must be a controlled empty directory, never the real
 	// C:\Users. The handover inspection globs it on the live filesystem, and a
@@ -99,9 +103,11 @@ func New(dataDir string) *Fixture {
 	}
 
 	reg := fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
-		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe").
-		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "SystemSetupInProgress", 1).
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_UNDEPLOYABLE").
+		SetDWORD(platform.HKLM, `SYSTEM\Setup\Status`, "AuditBoot", 1).
+		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "").
+		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "SystemSetupInProgress", 0).
+		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "OOBEInProgress", 0).
 		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\`+adminSID, "ProfileImagePath", demoProfile).
 		SetString(platform.HKU, adminSID+`\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`,
 			"{374DE290-123F-4565-9164-39C4925E467B}", filepath.Join(demoProfile, "Downloads"))
@@ -141,6 +147,10 @@ func New(dataDir string) *Fixture {
 		f.SysprepLogs,
 		f.Lock,
 		usersDir,
+		&fake.SetupStateFile{
+			Content: "[State]\r\nImageState=\"IMAGE_STATE_UNDEPLOYABLE\"\r\n",
+			Exists:  true,
+		},
 	)
 	return f
 }

@@ -283,6 +283,22 @@ func (m *SysprepMonitor) SysprepLogTimes(context.Context) ([]time.Time, error) {
 	return append([]time.Time(nil), m.LogTimes...), nil
 }
 
+// SetupStateFile is a fixed platform.SetupStateFile: the raw content of
+// %WINDIR%\Setup\State\State.ini, whether it exists, or a read error.
+type SetupStateFile struct {
+	Content string
+	Exists  bool
+	Err     error
+}
+
+// StateIniContent implements platform.SetupStateFile.
+func (f *SetupStateFile) StateIniContent(context.Context) (string, bool, error) {
+	if f.Err != nil {
+		return "", false, f.Err
+	}
+	return f.Content, f.Exists, nil
+}
+
 // InstanceLock is an in-memory platform.InstanceLock. A second TryLock on the
 // same value reports the lock as taken, mirroring the named-mutex behavior
 // within one process.
@@ -301,6 +317,12 @@ func (l *InstanceLock) TryLock() (bool, error) {
 	}
 	l.Held = true
 	return true, nil
+}
+
+// Unlock implements platform.InstanceLock.
+func (l *InstanceLock) Unlock() error {
+	l.Held = false
+	return nil
 }
 
 // ProcessLister is a fixed platform.ProcessLister.

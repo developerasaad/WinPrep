@@ -144,38 +144,93 @@ type SysprepMonitor interface {
 }
 
 // InstanceLock is a machine-wide mutual-exclusion primitive. WinPrep holds
-// it for the duration of an approved Clean & Finish run so two processes
-// can never clean and reseal the same machine at once.
+// it while an approved Clean & Finish run is in flight so two processes can
+// never clean and reseal the same machine at once.
 type InstanceLock interface {
-	// TryLock acquires the lock and reports whether it was free. The
-	// lock is held until the process exits; there is deliberately no
-	// unlock, because a half-finished handover must not be re-entered
-	// by a second instance racing the first.
+	// TryLock acquires the lock and reports whether it was free.
 	TryLock() (bool, error)
+	// Unlock releases the lock. It is called when an operation finished
+	// without initiating the reseal, so the operator can retry in the
+	// same session; after a successful reseal the machine is shutting
+	// down and the lock stays held for the process lifetime.
+	Unlock() error
+}
+
+// SetupStateFile reads the file-based mirror of the setup-state registry
+// values: %WINDIR%\Setup\State\State.ini. Microsoft documents both the
+// registry value and this file in "Windows Setup States"; the file carries
+// the same state in an INI section [State] with a quoted value.
+type SetupStateFile interface {
+	// StateIniContent returns the raw content of State.ini. ok is false
+	// when the file does not exist; any other read failure returns err.
+	StateIniContent(ctx context.Context) (content string, ok bool, err error)
 }
 
 // AuditSignals holds the raw Windows setup-state values used to determine the
 // deployment mode. Detection is intentionally multi-signal: no single value is
 // trusted on its own. See internal/audit for the evaluation rules and the
 // Microsoft references behind them.
+//
+// Every field records both the observation and whether it was available, so
+// evaluation can distinguish "absent", "present", and "unreadable" instead of
+// collapsing them into one default.
 type AuditSignals struct {
-	// SetupStateName is HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State\StateName.
-	// "IMAGE_STATE_COMPLETE" means Windows setup finished; "IMAGE_STATE_UNDEPLOYABLE"
-	// means the image is mid-deployment (Audit Mode or OOBE).
+	// SetupImageState is the ImageState value of
+	// HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State. Real
+	// Windows installations write this value name; documented states
+	// include IMAGE_STATE_COMPLETE (deployed), IMAGE_STATE_UNDEPLOYABLE
+	// (setup not finalized: Audit Mode, OOBE, or a failed phase), and the
+	// four IMAGE_STATE_{GENERALIZE,SPECIALIZE}_RESEAL_TO_{OOBE,AUDIT}
+	// transition states.
+	SetupImageState     string
+	HaveSetupImageState bool
+	// SetupStateName is the same registry key's StateName value. The prose
+	// of the Microsoft "Windows Setup States" page names this value, but
+	// the page's own examples and every field report use ImageState; no
+	// StateName value has been observed on a real installation. It is read
+	// as a fallback so the documented name is covered either way.
 	SetupStateName     string
 	HaveSetupStateName bool
-	// SetupCmdLine is HKLM\SYSTEM\Setup\CmdLine. It is "audit.exe" in Audit
-	// Mode and "oobe.exe" while OOBE runs.
+	// StateIniImageState is the ImageState entry parsed from
+	// %WINDIR%\Setup\State\State.ini, used when the registry values are
+	// absent and as a consistency cross-check when they are not.
+	// StateIniErr records a failed read (a missing file is not an error;
+	// it is reported through HaveStateIniImageState).
+	StateIniImageState     string
+	HaveStateIniImageState bool
+	StateIniErr            error
+	// SetupCmdLine is HKLM\SYSTEM\Setup\CmdLine, the command the setup
+	// engine runs before logon. Field reports show oobe\windeploy.exe,
+	// full paths to SetupComplete.cmd, or an empty value; it is collected
+	// as an observation only and never gates evaluation, because it is
+	// not an audit-specific signal.
 	SetupCmdLine     string
 	HaveSetupCmdLine bool
-	// SystemSetupInProgress is HKLM\SYSTEM\Setup\SystemSetupInProgress (1 while
-	// setup/audit is active).
+	// SystemSetupInProgress is HKLM\SYSTEM\Setup\SystemSetupInProgress
+	// (nonzero while the setup engine is running). Its value during an
+	// interactive Audit Mode desktop session is not reliably established,
+	// so it is recorded but not used as a gate.
 	SystemSetupInProgress     uint32
 	HaveSystemSetupInProgress bool
-	// OOBEInProgress is HKLM\SYSTEM\Setup\OOBEInProgress (1 while OOBE runs).
+	// OOBEInProgress is HKLM\SYSTEM\Setup\OOBEInProgress (nonzero while
+	// first-time setup is on screen).
 	OOBEInProgress     uint32
 	HaveOOBEInProgress bool
-	// User context at the time of collection.
+	// AuditBoot is HKLM\SYSTEM\Setup\Status\AuditBoot. Sysprep's /audit
+	// reseal leaves it at 1 while the machine keeps booting into Audit
+	// Mode; machines observed "trapped" in Audit Mode carry 1, and the
+	// community-documented way out is letting a Sysprep /oobe reseal
+	// clear it. Microsoft does not document the value officially.
+	AuditBoot     uint32
+	HaveAuditBoot bool
+	// AuditBootVolatile is HKLM\SYSTEM\Setup\Status\AuditBootVolatile, a
+	// sibling value observed on Windows 11 installations. It is read so a
+	// build that uses the volatile variant instead of the persistent one
+	// is not misread as "no audit boot flag".
+	AuditBootVolatile     uint32
+	HaveAuditBootVolatile bool
+	// User context at the time of collection. Audit Mode sessions run as
+	// the built-in Administrator (RID 500) per Microsoft's documentation.
 	CurrentUserSID            string
 	CurrentUserIsBuiltinAdmin bool
 }

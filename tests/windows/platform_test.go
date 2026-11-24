@@ -88,21 +88,38 @@ func TestSystemInfoFromRealMachine(t *testing.T) {
 func TestAuditSignalsFromRealMachine(t *testing.T) {
 	reg := windows.NewRegistry()
 	sys := windows.NewSystem(reg)
-	svc := audit.NewService(reg, sys)
+	svc := audit.NewService(reg, sys, windows.NewSetupStateFile())
+
+	sig, err := svc.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("collecting audit signals: %v", err)
+	}
+	// Real Windows installations write the setup state under the
+	// ImageState value name. This assertion is the regression guard for
+	// the v0.2.0-alpha.1 defect, which read StateName (never present on
+	// real machines) and evaluated every real machine as "unknown".
+	if !sig.HaveSetupImageState {
+		t.Error("ImageState should exist under SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup\\State on a real Windows installation")
+	}
 
 	assessment, err := svc.Inspect(context.Background())
 	if err != nil {
 		t.Fatalf("audit inspection: %v", err)
 	}
-	// The state must be one of the defined states; a CI runner or normal
-	// machine is a deployed installation, but the test only requires that
-	// detection reaches a definite conclusion without error.
+	// A normally deployed Windows installation (GitHub Actions runners,
+	// developer machines) reports IMAGE_STATE_COMPLETE and must be
+	// classified as deployed, never as Audit Mode. A machine in Audit
+	// Mode or OOBE would legitimately report a different state.
 	switch assessment.State {
-	case audit.StateAuditMode, audit.StateOOBE, audit.StateNormalInstalled,
-		audit.StateUncertain, audit.StateUnknown:
-		// all defined states are acceptable outcomes of an honest read
+	case audit.StateNormalInstalled:
+		// the expected outcome on a deployed installation
+	case audit.StateAuditMode, audit.StateOOBE, audit.StateUncertain:
+		t.Logf("machine reports %q (summary: %s); acceptable outside a deployed installation", assessment.State, assessment.Summary)
 	default:
 		t.Errorf("undefined audit state %d", assessment.State)
+	}
+	if assessment.State == audit.StateUnknown {
+		t.Errorf("a real Windows installation must produce a definite setup-state classification, got unknown (summary: %s)", assessment.Summary)
 	}
 	if assessment.Summary == "" {
 		t.Error("assessment should carry a human-readable summary")

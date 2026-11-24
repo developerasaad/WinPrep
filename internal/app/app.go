@@ -12,11 +12,6 @@ import (
 // single responsibility; the presentation layers orchestrate them but never
 // implement Windows behavior themselves.
 type App struct {
-	System   platform.System
-	Registry platform.Registry
-	Runner   platform.Runner
-	Procs    platform.ProcessLister
-
 	Audit    *audit.Service
 	Persist  *persist.Service
 	Handover *handover.Controller
@@ -27,14 +22,10 @@ type App struct {
 // fully wired App from fake or alternative implementations.
 func Assemble(sys platform.System, reg platform.Registry, run platform.Runner, procs platform.ProcessLister,
 	store *artifacts.Store, sysprep handover.SysprepRunner, sysprepReports platform.SysprepMonitor,
-	lock platform.InstanceLock, usersDir string) *App {
+	lock platform.InstanceLock, usersDir string, stateIni platform.SetupStateFile) *App {
 
 	a := &App{
-		System:   sys,
-		Registry: reg,
-		Runner:   run,
-		Procs:    procs,
-		Audit:    audit.NewService(reg, sys),
+		Audit: audit.NewService(reg, sys, stateIni),
 	}
 	a.Persist = persist.NewService(sys, a.Audit, procs, store)
 	a.Handover = &handover.Controller{

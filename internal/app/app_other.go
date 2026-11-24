@@ -29,6 +29,7 @@ func New() *App {
 		&stubSysprepMonitor{},
 		&stubInstanceLock{},
 		"",
+		&stubSetupStateFile{},
 	)
 }
 
@@ -92,6 +93,10 @@ func (l *stubInstanceLock) TryLock() (bool, error) {
 	return false, platform.ErrUnsupportedPlatform
 }
 
+func (l *stubInstanceLock) Unlock() error {
+	return platform.ErrUnsupportedPlatform
+}
+
 type stubSysprep struct{}
 
 func (s *stubSysprep) SysprepPath() (string, error) {
@@ -100,6 +105,12 @@ func (s *stubSysprep) SysprepPath() (string, error) {
 
 func (s *stubSysprep) RunReseal(context.Context) (int, error) {
 	return 0, platform.ErrUnsupportedPlatform
+}
+
+type stubSetupStateFile struct{}
+
+func (f *stubSetupStateFile) StateIniContent(context.Context) (string, bool, error) {
+	return "", false, platform.ErrUnsupportedPlatform
 }
 
 // Compile-time check that the handover flow stays constructible with stubs

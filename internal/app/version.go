@@ -6,7 +6,7 @@ package app
 // Version is the WinPrep release version. It follows semantic versioning;
 // prerelease labels (e.g. -alpha.1) mark builds whose full Windows lifecycle
 // has not been validated yet.
-const Version = "0.2.0-alpha.1"
+const Version = "0.2.0-alpha.2"
 
 // BuildCommit is set at build time via -ldflags. It is empty for local
 // builds, which is reported honestly rather than guessed.

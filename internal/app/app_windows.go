@@ -31,6 +31,7 @@ func New() *App {
 		windows.NewSysprepMonitor(),
 		windows.NewInstanceLock(),
 		windows.UsersDir(),
+		windows.NewSetupStateFile(),
 	)
 }
 

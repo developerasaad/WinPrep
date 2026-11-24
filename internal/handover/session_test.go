@@ -31,11 +31,14 @@ func (s *fakeSysprep) RunReseal(context.Context) (int, error) {
 	return s.exitCode, s.runErr
 }
 
-// auditReadyRegistry returns a registry that reports a consistent Audit Mode.
+// auditReadyRegistry returns a registry that reports a consistent Audit
+// Mode, using the values a real machine exposes: ImageState (the value name
+// real Windows writes) plus the AuditBoot flag, and no "audit.exe" command
+// line.
 func auditReadyRegistry() *fake.Registry {
 	return fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
-		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_UNDEPLOYABLE").
+		SetDWORD(platform.HKLM, `SYSTEM\Setup\Status`, "AuditBoot", 1)
 }
 
 // newTestController builds a controller whose machine is a plausible Audit
@@ -84,7 +87,7 @@ func buildControllerParts(t *testing.T, reg *fake.Registry) (c *Controller, sys 
 		Sys:            sys,
 		Reg:            reg,
 		Procs:          procs,
-		Audit:          audit.NewService(reg, sys),
+		Audit:          audit.NewService(reg, sys, nil),
 		Store:          store,
 		Sysprep:        sp,
 		SysprepReports: logs,
@@ -280,7 +283,7 @@ func TestSysprepAppearingAfterPlanningStopsExecution(t *testing.T) {
 // rejected instead of being reset through Sysprep.
 func TestDeployedWindowsIsRejected(t *testing.T) {
 	reg := fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_COMPLETE")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_COMPLETE")
 	c, _, _, sp, _ := newTestController(t, reg)
 
 	session, err := c.Begin(context.Background())
@@ -458,7 +461,7 @@ func TestResealSuccessAndFailures(t *testing.T) {
 
 func TestInspectNormalMachineIsBlocked(t *testing.T) {
 	reg := fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_COMPLETE")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_COMPLETE")
 	c, _, _, _, _ := newTestController(t, reg)
 	res, err := c.Inspect(context.Background())
 	if err != nil {
@@ -543,5 +546,189 @@ func TestIdleSysprepWindowIsAttentionNotBlocker(t *testing.T) {
 	}
 	if res.Verdict != VerdictAttention {
 		t.Fatalf("an idle Sysprep window should be attention, verdict = %v", res.Verdict)
+	}
+}
+
+// Test I (regression): a process list that cannot be read at execution time
+// must fail closed. The overlap guarantee with a running Sysprep depends on
+// it, and "could not read" is not permission to act.
+func TestExecuteFailsClosedWhenProcessListUnavailable(t *testing.T) {
+	c, _, _, sp, _ := newTestController(t, auditReadyRegistry())
+	demoFile := filepath.Join(c.UsersDir, "Administrator", "Downloads", "file.txt")
+	if err := os.WriteFile(demoFile, []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := c.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Approve()
+
+	// The list breaks between approval and execution.
+	c.Procs = &fake.ProcessLister{Err: errors.New("snapshot failed")}
+
+	res, err := session.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Phase != PhaseConditionsChanged {
+		t.Fatalf("phase = %v, want PhaseConditionsChanged (detail: %s)", res.Phase, res.Detail)
+	}
+	if !strings.Contains(res.Detail, "running-process list") {
+		t.Errorf("detail should name the unreadable process list: %s", res.Detail)
+	}
+	if data, err := os.ReadFile(demoFile); err != nil || string(data) != "demo" {
+		t.Error("nothing may be modified when the process list is unreadable")
+	}
+	if sp.ressealed {
+		t.Error("Sysprep must never start when the process list is unreadable")
+	}
+}
+
+// Test J (regression): a blocker that appears between approval and execution
+// (here: a pending servicing restart) must stop the handover before anything
+// is deleted.
+func TestExecuteRevalidatesBlockersAppearingAfterApproval(t *testing.T) {
+	c, reg, _, sp, _ := newTestController(t, auditReadyRegistry())
+	demoFile := filepath.Join(c.UsersDir, "Administrator", "Downloads", "file.txt")
+	if err := os.WriteFile(demoFile, []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := c.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Preflight.Verdict != VerdictReady {
+		t.Fatalf("initial verdict = %v, want Ready", session.Preflight.Verdict)
+	}
+	session.Approve()
+
+	// A servicing restart becomes pending after the operator confirmed.
+	reg.AddKey(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending`)
+
+	res, err := session.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Phase != PhaseConditionsChanged {
+		t.Fatalf("phase = %v, want PhaseConditionsChanged (detail: %s)", res.Phase, res.Detail)
+	}
+	if data, err := os.ReadFile(demoFile); err != nil || string(data) != "demo" {
+		t.Error("a new blocker must prevent any deletion")
+	}
+	if sp.ressealed {
+		t.Error("a new blocker must prevent the reseal")
+	}
+}
+
+// Test K (regression): the executor refuses to follow an approved location
+// that became a reparse point after planning. The deletion stays inside the
+// approved scope, and the run reports failure instead of traversing the link.
+func TestExecutorRefusesReparsePointRoot(t *testing.T) {
+	c, _, _, sp, _ := newTestController(t, auditReadyRegistry())
+
+	// A decoy directory outside the approved scope with a file inside.
+	decoyDir := filepath.Join(t.TempDir(), "decoy")
+	if err := os.MkdirAll(decoyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	decoyFile := filepath.Join(decoyDir, "secret.txt")
+	if err := os.WriteFile(decoyFile, []byte("decoy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The approved Downloads location is replaced by a link to the decoy.
+	downloads := filepath.Join(c.UsersDir, "Administrator", "Downloads")
+	if err := os.RemoveAll(downloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(decoyDir, downloads); err != nil {
+		t.Skipf("symlinks are unavailable on this platform: %v", err)
+	}
+
+	plan := CleanupPlan{DemoTargets: []PlanTarget{{
+		kind:  kindDirContents,
+		Label: "Downloads",
+		Root:  downloads,
+	}}}
+	res := ExecutePlan(plan)
+	if res.Complete {
+		t.Fatal("the cleanup must not report success when the root is a reparse point")
+	}
+	if data, err := os.ReadFile(decoyFile); err != nil || string(data) != "decoy" {
+		t.Fatal("the executor must never follow a swapped reparse point; the decoy was modified")
+	}
+	joined := strings.Join(res.SummaryLines(), "\n")
+	if !strings.Contains(joined, "reparse point") {
+		t.Errorf("the failure should name the reparse point:\n%s", joined)
+	}
+	if sp.ressealed {
+		t.Error("the executor never touches Sysprep itself")
+	}
+}
+
+// Test L (regression): after a failed cleanup the operation lock is released,
+// so the operator can retry in the same process; once a reseal is initiated
+// the lock stays held for the process lifetime.
+func TestLockLifecycleAroundFailedAndSuccessfulRuns(t *testing.T) {
+	c, _, _, sp, _ := newTestController(t, auditReadyRegistry())
+	c.Lock = &fake.InstanceLock{}
+
+	downloads := filepath.Join(c.UsersDir, "Administrator", "Downloads")
+	if err := os.WriteFile(filepath.Join(downloads, "locked.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := c.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Approve()
+
+	undo := makeUndeletable(t, downloads)
+	res, err := session.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Phase != PhaseCleanupFailed {
+		t.Fatalf("phase = %v, want PhaseCleanupFailed", res.Phase)
+	}
+
+	// The lock must be free again for an in-process retry.
+	undo()
+	session2, err := c.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session2.Approve()
+	res2, err := session2.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Phase != PhaseResealInitiated {
+		t.Fatalf("retry phase = %v, want PhaseResealInitiated (detail: %s)", res2.Phase, res2.Detail)
+	}
+
+	// After the initiated reseal the lock stays held: the machine is going
+	// down, and a second run must report busy, not start over.
+	if !c.Lock.(*fake.InstanceLock).Held {
+		t.Fatal("the lock must remain held after an initiated reseal")
+	}
+	session3, err := c.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session3.Approve()
+	res3, err := session3.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res3.Phase != PhaseBusy {
+		t.Fatalf("phase after initiated reseal = %v, want PhaseBusy", res3.Phase)
+	}
+	if !sp.ressealed {
+		t.Error("the fake sysprep must have been used by the approved retries")
 	}
 }

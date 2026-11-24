@@ -16,13 +16,17 @@ func newService(reg *fake.Registry, procs *fake.ProcessLister, store *artifacts.
 		Sys: platform.SystemInfo{IsWindows: true},
 		Usr: platform.UserInfo{IsElevated: true, SID: "S-1-5-21-1-2-3-500", IsBuiltinAdmin: true},
 	}
-	return NewService(sys, audit.NewService(reg, sys), procs, store)
+	return NewService(sys, audit.NewService(reg, sys, nil), procs, store)
 }
 
+// auditRegistry mirrors a real Audit Mode machine: the ImageState value real
+// Windows writes, plus the AuditBoot flag. No StateName, no "audit.exe"
+// command line - those were the v0.2.0-alpha.1 assumptions real machines do
+// not match.
 func auditRegistry() *fake.Registry {
 	return fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
-		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_UNDEPLOYABLE").
+		SetDWORD(platform.HKLM, `SYSTEM\Setup\Status`, "AuditBoot", 1)
 }
 
 func TestAuditModeIsReadyWithoutChanges(t *testing.T) {
@@ -63,8 +67,8 @@ func TestSysprepWindowNoteWithoutAutoClose(t *testing.T) {
 
 func TestOOBEGuidance(t *testing.T) {
 	reg := fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
-		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "oobe.exe")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_UNDEPLOYABLE").
+		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "OOBEInProgress", 1)
 	svc := newService(reg, &fake.ProcessLister{}, artifacts.NewStore(t.TempDir()))
 	r, err := svc.Inspect(t.Context())
 	if err != nil {
@@ -81,7 +85,7 @@ func TestOOBEGuidance(t *testing.T) {
 
 func TestNormalInstallGuidance(t *testing.T) {
 	reg := fake.NewRegistry().
-		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_COMPLETE")
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_COMPLETE")
 	svc := newService(reg, &fake.ProcessLister{}, artifacts.NewStore(t.TempDir()))
 	r, err := svc.Inspect(t.Context())
 	if err != nil {
@@ -97,13 +101,20 @@ func TestNormalInstallGuidance(t *testing.T) {
 }
 
 func TestUncertainStateIsNotReady(t *testing.T) {
-	svc := newService(fake.NewRegistry(), &fake.ProcessLister{}, artifacts.NewStore(t.TempDir()))
+	// Audit-family image state without the corroborating audit boot flag:
+	// plausible-looking but unconfirmable, which must stay not-ready.
+	reg := fake.NewRegistry().
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "ImageState", "IMAGE_STATE_UNDEPLOYABLE")
+	svc := newService(reg, &fake.ProcessLister{}, artifacts.NewStore(t.TempDir()))
 	r, err := svc.Inspect(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.ReadyForDemo {
 		t.Error("an uncertain state must never be reported as ready")
+	}
+	if r.Audit.State != audit.StateUncertain {
+		t.Errorf("state = %v, want StateUncertain", r.Audit.State)
 	}
 }
 
