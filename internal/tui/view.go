@@ -163,7 +163,7 @@ func (m *Model) screenTitle() string {
 			return "Clean & Finish - inspection"
 		case hoConfirm:
 			return "Clean & Finish - confirm"
-		case hoReseal:
+		case hoExecute:
 			return "Clean & Finish - finishing"
 		default:
 			return "Clean & Finish - result"
@@ -177,11 +177,11 @@ func (m *Model) screenTitle() string {
 func (m *Model) renderConfirm() string {
 	var b strings.Builder
 	b.WriteString("\n")
-	for _, l := range wrap(handoverWarning(), m.wrapWidth()) {
+	for _, l := range wrap(handover.ConfirmationWarning(), m.wrapWidth()) {
 		b.WriteString(styleWarn.Render(l))
 		b.WriteString("\n")
 	}
-	if m.preflight.Verdict == handover.VerdictAttention {
+	if m.session != nil && m.session.Preflight.Verdict == handover.VerdictAttention {
 		b.WriteString("\n")
 		b.WriteString(styleWarn.Render("There are items marked \"Requires attention\" in the inspection above."))
 		b.WriteString("\n")
@@ -214,14 +214,14 @@ func (m *Model) footerHint() string {
 	case screenHandover:
 		switch m.phase {
 		case hoReview:
-			if m.preflight.Verdict == handover.VerdictBlocked {
+			if m.session == nil || m.session.Preflight.Verdict == handover.VerdictBlocked {
 				return "UP/DOWN Scroll   ESC Back"
 			}
 			return "ENTER Continue   UP/DOWN Scroll   ESC Back"
 		case hoConfirm:
 			return "LEFT/RIGHT Choose   ENTER Select   Y/N Shortcut"
-		case hoReseal:
-			return "Sysprep is running - do not turn off the laptop"
+		case hoExecute:
+			return "Cleaning and resealing - do not turn off the laptop"
 		default:
 			return "UP/DOWN Scroll   ESC Back"
 		}
@@ -230,30 +230,15 @@ func (m *Model) footerHint() string {
 	}
 }
 
-// handoverWarning is the confirmation text shown before the handover runs.
-func handoverWarning() string {
-	return strings.Join([]string{
-		"You are about to prepare this laptop for handover to a buyer.",
-		"",
-		"  - Windows will be resealed into first-time setup (OOBE) and the laptop is",
-		"    expected to shut down when Sysprep finishes.",
-		"  - The process can fail. If it does, WinPrep will report the error and point",
-		"    you to the Sysprep logs; the laptop will not be prepared.",
-		"  - Sysprep does NOT securely erase data. Files, accounts, and traces from",
-		"    your preparation and customer testing remain on the disk. If the laptop",
-		"    must be wiped, do that separately before selling it.",
-		"  - After the handover, start the laptop once yourself and verify that",
-		"    Windows first-time setup appears, before handing it to the buyer.",
-	}, "\n")
-}
-
-// renderPreflight formats the preflight checks for the TUI.
-func renderPreflight(r handover.PreflightResult, err error) []string {
+// renderSessionReview formats the inspection and the cleanup plan for the
+// TUI review screen.
+func renderSessionReview(session *handover.Session, err error) []string {
 	if err != nil {
 		return []string{"The inspection could not complete:", "", "  " + err.Error(), "",
 			"Nothing was changed. Try again; if it keeps failing, report this as a bug."}
 	}
 	var lines []string
+	r := session.Preflight
 	lines = append(lines, "Overall: "+verdictStyle(r.Verdict.String()).Render(r.Verdict.String()))
 	lines = append(lines, "")
 	for _, c := range r.Checks {
@@ -264,6 +249,10 @@ func renderPreflight(r handover.PreflightResult, err error) []string {
 		if c.NextStep != "" {
 			lines = append(lines, "  Next step: "+c.NextStep)
 		}
+		lines = append(lines, "")
+	}
+	if session.Plan != nil {
+		lines = append(lines, session.Plan.SummaryLines()...)
 		lines = append(lines, "")
 	}
 	switch r.Verdict {
@@ -277,56 +266,20 @@ func renderPreflight(r handover.PreflightResult, err error) []string {
 	return lines
 }
 
-// renderOutcome formats the post-reseal result, distinguishing cleanup
-// failure, Sysprep launch failure, Sysprep error, and initiation.
-func renderOutcome(cleanup []handover.CleanupResult, cleanupErr error, reseal handover.ResealResult, resealErr error) []string {
-	var lines []string
-	if cleanupErr != nil {
-		lines = append(lines, styleError.Render("Cleaning up WinPrep's artifacts failed:"))
-		lines = append(lines, "  "+cleanupErr.Error())
-		lines = append(lines, "",
-			"The reseal was NOT started. Resolve the cleanup problem and run",
-			"\"Clean & Finish\" again.")
-		return lines
+// renderResult formats the executed outcome, which the controller already
+// rendered as plain lines; the TUI adds color to the leading phase line.
+func renderResult(result handover.Result, err error) []string {
+	if err != nil {
+		return []string{styleError.Render("The handover failed:"), "  " + err.Error(), "",
+			"Nothing further was changed. Try again; if it keeps failing, report this as a bug."}
 	}
-	if len(cleanup) == 0 {
-		lines = append(lines, "WinPrep artifacts: nothing to remove.")
-	} else {
-		lines = append(lines, "WinPrep artifacts removed:")
-		for _, c := range cleanup {
-			if c.Err != "" {
-				lines = append(lines, "  failed: "+c.Entry.Path+" ("+c.Err+")")
-			} else {
-				lines = append(lines, "  removed: "+c.Entry.Path)
-			}
+	lines := result.SummaryLines()
+	if len(lines) > 0 {
+		if result.Succeeded() {
+			lines[0] = styleOK.Render(lines[0])
+		} else if result.Phase != handover.PhaseCancelled {
+			lines[0] = styleError.Render(lines[0])
 		}
-	}
-	lines = append(lines, "")
-
-	if resealErr != nil {
-		lines = append(lines, styleError.Render("The handover failed:"))
-		lines = append(lines, "  "+resealErr.Error())
-		lines = append(lines, "", "Sysprep writes details to these logs:")
-		lines = append(lines, handover.PantherLogPaths()...)
-		return lines
-	}
-
-	switch reseal.Outcome {
-	case handover.ResealInitiated:
-		lines = append(lines, styleOK.Render(reseal.Outcome.String()))
-		lines = append(lines, reseal.Detail)
-		lines = append(lines, "",
-			"WinPrep's part is done. The claims of a successful handover still need your",
-			"own verification: switch the laptop on once and confirm that Windows",
-			"first-time setup appears before selling it.")
-	default:
-		lines = append(lines, styleError.Render(reseal.Outcome.String()))
-		lines = append(lines, reseal.Detail)
-		lines = append(lines, "", "Sysprep writes details to these logs:")
-		lines = append(lines, handover.PantherLogPaths()...)
-		lines = append(lines, "",
-			"Microsoft's Sysprep troubleshooting guide:",
-			"https://learn.microsoft.com/en-us/troubleshoot/windows-client/setup-upgrade-and-drivers/sysprep-fails-remove-or-update-store-apps")
 	}
 	return lines
 }

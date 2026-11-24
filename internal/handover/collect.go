@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/developerasaad/winprep/internal/artifacts"
 	"github.com/developerasaad/winprep/internal/audit"
@@ -19,10 +20,12 @@ const (
 	sessionMgrKey  = `SYSTEM\CurrentControlSet\Control\Session Manager`
 )
 
-// Flow wires the platform services into the handover steps. Both the CLI and
-// the TUI drive the same Flow; there is exactly one implementation of the
-// handover procedure.
-type Flow struct {
+// Controller owns the Clean & Finish workflow: preflight, cleanup-plan
+// construction, approval state, final validation, cleanup execution, reseal
+// invocation, and outcome reporting. Both the CLI and the TUI present its
+// results and collect the confirmation; neither decides for itself when it
+// is safe to delete files or invoke Sysprep.
+type Controller struct {
 	Sys     platform.System
 	Reg     platform.Registry
 	Procs   platform.ProcessLister
@@ -30,14 +33,21 @@ type Flow struct {
 	Store   *artifacts.Store
 	Sysprep SysprepRunner
 
+	// SysprepReports distinguishes an idle System Preparation Tool window
+	// from an active Sysprep operation.
+	SysprepReports platform.SysprepMonitor
+	// Lock prevents concurrent Clean & Finish operations across
+	// processes. A nil Lock disables the check (unit tests).
+	Lock platform.InstanceLock
+
 	// UsersDir is the profiles root used to find orphan profile folders.
 	UsersDir string
 }
 
 // Inspect gathers fresh facts and evaluates them. Facts are always gathered
-// live: no cached state may authorize a handover.
-func (f *Flow) Inspect(ctx context.Context) (PreflightResult, error) {
-	facts, err := f.Gather(ctx)
+// live: no cached inspection result may authorize a handover.
+func (c *Controller) Inspect(ctx context.Context) (PreflightResult, error) {
+	facts, err := c.Gather(ctx)
 	if err != nil {
 		return PreflightResult{}, err
 	}
@@ -49,43 +59,47 @@ func (f *Flow) Inspect(ctx context.Context) (PreflightResult, error) {
 // audit state or system facts) aborts the whole inspection; individual
 // subsystem failures are recorded as facts errors and surface as Unknown
 // checks.
-func (f *Flow) Gather(ctx context.Context) (Facts, error) {
+func (c *Controller) Gather(ctx context.Context) (Facts, error) {
 	var facts Facts
 
-	sys, err := f.Sys.SystemInfo(ctx)
+	sys, err := c.Sys.SystemInfo(ctx)
 	if err != nil {
 		return facts, fmt.Errorf("reading system information: %w", err)
 	}
 	facts.System = sys
 
-	user, err := f.Sys.UserInfo(ctx)
+	user, err := c.Sys.UserInfo(ctx)
 	if err != nil {
 		return facts, fmt.Errorf("reading user information: %w", err)
 	}
 	facts.User = user
 
-	assessment, err := f.Audit.Inspect(ctx)
+	assessment, err := c.Audit.Inspect(ctx)
 	if err != nil {
 		return facts, fmt.Errorf("determining setup state: %w", err)
 	}
 	facts.Audit = assessment
 
-	facts.Accounts, facts.AccountsErr = f.listAccounts(ctx)
-	facts.Profiles, facts.ProfilesErr, facts.OrphanDirs = f.listProfiles()
-	facts.SysprepPresent, facts.SysprepErr = f.checkSysprep()
-	facts.ProcessNames, facts.ProcsErr = f.Procs.ProcessNames(ctx)
+	facts.Accounts, facts.AccountsErr = c.listAccounts(ctx)
+	facts.Profiles, facts.ProfilesErr, facts.OrphanDirs = c.listProfiles()
+	facts.SysprepPresent, facts.SysprepErr = c.checkSysprep()
+	facts.ProcessNames, facts.ProcsErr = c.Procs.ProcessNames(ctx)
 	facts.SysprepRunning = processRunning(facts.ProcessNames, "sysprep.exe")
-	facts.PendingCBSReboot, facts.PendingWUReboot, facts.PendingFileRename, facts.RebootErr = f.readRebootState()
-	if m, err := f.Store.Load(); err != nil {
-		facts.ArtifactsErr = err
-	} else {
-		facts.Artifacts = m.Entries
-	}
+	facts.SysprepLogTimes, facts.SysprepLogErr = c.sysprepLogTimes(ctx)
+	facts.PendingCBSReboot, facts.PendingWUReboot, facts.PendingFileRename, facts.RebootErr = c.readRebootState()
+	facts.Now = time.Now()
 	return facts, nil
 }
 
-func (f *Flow) listAccounts(ctx context.Context) ([]AccountFact, error) {
-	accounts, err := f.Sys.LocalAccounts(ctx)
+func (c *Controller) sysprepLogTimes(ctx context.Context) ([]time.Time, error) {
+	if c.SysprepReports == nil {
+		return nil, nil
+	}
+	return c.SysprepReports.SysprepLogTimes(ctx)
+}
+
+func (c *Controller) listAccounts(ctx context.Context) ([]AccountFact, error) {
+	accounts, err := c.Sys.LocalAccounts(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("querying local accounts: %w", err)
 	}
@@ -101,14 +115,14 @@ func (f *Flow) listAccounts(ctx context.Context) ([]AccountFact, error) {
 	return extra, nil
 }
 
-func (f *Flow) listProfiles() (extra []ProfileFact, profilesErr error, orphans []string) {
-	subKeys, err := f.Reg.SubKeyNames(platform.HKLM, profileListKey)
+func (c *Controller) listProfiles() (extra []ProfileFact, profilesErr error, orphans []string) {
+	subKeys, err := c.Reg.SubKeyNames(platform.HKLM, profileListKey)
 	if err != nil {
 		return nil, err, nil
 	}
 	var registered []ProfileFact
 	for _, sid := range subKeys {
-		path, ok, err := f.Reg.StringValue(platform.HKLM, profileListKey+`\`+sid, "ProfileImagePath")
+		path, ok, err := c.Reg.StringValue(platform.HKLM, profileListKey+`\`+sid, "ProfileImagePath")
 		if err != nil {
 			return nil, err, nil
 		}
@@ -123,8 +137,8 @@ func (f *Flow) listProfiles() (extra []ProfileFact, profilesErr error, orphans [
 
 	// Folders under the profiles root that no registered profile claims and
 	// that are not part of the standard set are worth a look before a sale.
-	if f.UsersDir != "" {
-		entries, err := filepath.Glob(filepath.Join(f.UsersDir, "*"))
+	if c.UsersDir != "" {
+		entries, err := filepath.Glob(filepath.Join(c.UsersDir, "*"))
 		if err == nil {
 			for _, dir := range entries {
 				name := filepath.Base(dir)
@@ -158,23 +172,23 @@ func isStandardProfileDir(name string) bool {
 	return false
 }
 
-func (f *Flow) checkSysprep() (bool, error) {
-	if _, err := f.Sysprep.SysprepPath(); err != nil {
+func (c *Controller) checkSysprep() (bool, error) {
+	if _, err := c.Sysprep.SysprepPath(); err != nil {
 		return false, nil
 	}
 	return true, nil
 }
 
-func (f *Flow) readRebootState() (cbs, wu, fileRename bool, err error) {
-	cbs, err = f.Reg.KeyExists(platform.HKLM, cbsRebootKey)
+func (c *Controller) readRebootState() (cbs, wu, fileRename bool, err error) {
+	cbs, err = c.Reg.KeyExists(platform.HKLM, cbsRebootKey)
 	if err != nil {
 		return false, false, false, fmt.Errorf("reading component servicing state: %w", err)
 	}
-	wu, err = f.Reg.KeyExists(platform.HKLM, wuRebootKey)
+	wu, err = c.Reg.KeyExists(platform.HKLM, wuRebootKey)
 	if err != nil {
 		return false, false, false, fmt.Errorf("reading update state: %w", err)
 	}
-	ops, _, err := f.Reg.MultiStringValue(platform.HKLM, sessionMgrKey, "PendingFileRenameOperations")
+	ops, _, err := c.Reg.MultiStringValue(platform.HKLM, sessionMgrKey, "PendingFileRenameOperations")
 	if err != nil {
 		return false, false, false, fmt.Errorf("reading pending file operations: %w", err)
 	}
@@ -191,11 +205,11 @@ func sidRID(sid string) int {
 		return 0
 	}
 	rid := 0
-	for _, c := range sid[i+1:] {
-		if c < '0' || c > '9' {
+	for _, ch := range sid[i+1:] {
+		if ch < '0' || ch > '9' {
 			return 0
 		}
-		rid = rid*10 + int(c-'0')
+		rid = rid*10 + int(ch-'0')
 	}
 	return rid
 }

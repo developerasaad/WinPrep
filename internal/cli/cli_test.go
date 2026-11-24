@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -201,5 +203,75 @@ func TestCleanUnknownOptionIsUsageError(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "unknown option for clean: --force") {
 		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
+// Test B (mandatory regression): a CLI-approved Clean & Finish must drive the
+// shared controller to the same end state as the TUI flow, which the
+// model tests drive through the very same session. File-level effects are
+// asserted here so "same workflow" means the same deletions, not just the
+// same exit path.
+func TestCleanConfirmedRemovesApprovedData(t *testing.T) {
+	f := apptest.New(t.TempDir())
+	downloads := f.DemoProfile + string(os.PathSeparator) + "Downloads"
+	if err := os.WriteFile(filepath.Join(downloads, "customer-file.txt"), []byte("demo data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A file on the Desktop is outside the approved scope and must survive.
+	desktop := f.DemoProfile + string(os.PathSeparator) + "Desktop"
+	if err := os.MkdirAll(desktop, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(desktop, "keep-me.txt"), []byte("operator file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	io, out, _ := newIO("", false)
+	code := Run(t.Context(), f.App, io, []string{"clean", "--yes"})
+	if code != ExitOK {
+		t.Fatalf("exit = %d, output:\n%s", code, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(downloads, "customer-file.txt")); !os.IsNotExist(err) {
+		t.Error("the approved demonstration data must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(desktop, "keep-me.txt")); err != nil {
+		t.Errorf("files outside the approved scope must survive: %v", err)
+	}
+	if _, err := os.Stat(f.Store.Dir); !os.IsNotExist(err) {
+		t.Error("the WinPrep data directory must be removed")
+	}
+	if !f.Sysprep.Called {
+		t.Error("the confirmed handover must invoke Sysprep")
+	}
+}
+
+// Test C (mandatory regression): a dry run must be strictly read-only.
+func TestCleanDryRunLeavesEveryFileInPlace(t *testing.T) {
+	f := apptest.New(t.TempDir())
+	downloads := f.DemoProfile + string(os.PathSeparator) + "Downloads"
+	demoFile := filepath.Join(downloads, "demo.txt")
+	if err := os.WriteFile(demoFile, []byte("demo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	io, out, _ := newIO("", false)
+	code := Run(t.Context(), f.App, io, []string{"clean", "--dry-run"})
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if data, err := os.ReadFile(demoFile); err != nil || string(data) != "demo" {
+		t.Errorf("dry run must not remove anything, got %q, %v", data, err)
+	}
+	if _, err := os.Stat(f.Store.Dir); err != nil {
+		t.Error("dry run must keep the WinPrep data directory")
+	}
+	if f.Sysprep.Called {
+		t.Error("dry run must never invoke Sysprep")
+	}
+	if !strings.Contains(out.String(), demoFile) == false {
+		// The plan should have counted the file without touching it.
+		if !strings.Contains(out.String(), "Downloads") || !strings.Contains(out.String(), "1 items") {
+			t.Error("the dry run should preview what would be removed")
+		}
 	}
 }

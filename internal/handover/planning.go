@@ -56,8 +56,8 @@ var reviewFolders = []string{"Desktop", "Documents", "Pictures", "Videos", "Musi
 // BuildCleanupPlan constructs the read-only cleanup proposal from freshly
 // gathered facts. It performs no modification of any kind. selfPath is the
 // path of the running executable (empty when unknown); the planner refuses to
-// approve a plan whose cleanup would delete the running program itself.
-func (f *Flow) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, error) {
+// approve a plan whose cleanup would delete the running program itselc.
+func (c *Controller) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, error) {
 	plan := CleanupPlan{}
 
 	// The demonstration profile must be resolvable through the session user's
@@ -67,7 +67,7 @@ func (f *Flow) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, erro
 		return plan, fmt.Errorf("cannot establish the demonstration profile: the session user %q is not the built-in Administrator",
 			facts.User.SID)
 	}
-	root, err := f.profileRoot(facts.User.SID)
+	root, err := c.profileRoot(facts.User.SID)
 	if err != nil {
 		return plan, fmt.Errorf("cannot establish the demonstration profile: %w", err)
 	}
@@ -77,22 +77,22 @@ func (f *Flow) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, erro
 	// construction. Manifest entries must agree with that ownership rule; a
 	// manifest that claims paths outside the data directory is treated as
 	// tampered, not executed.
-	if _, statErr := os.Lstat(f.Store.Dir); statErr == nil {
+	if _, statErr := os.Lstat(c.Store.Dir); statErr == nil {
 		plan.WinPrepTargets = append(plan.WinPrepTargets, PlanTarget{
 			kind:  kindDataDir,
 			Label: "WinPrep data directory",
-			Root:  f.Store.Dir,
+			Root:  c.Store.Dir,
 		})
 	}
-	manifest, mErr := f.Store.Load()
+	manifest, mErr := c.Store.Load()
 	switch {
 	case mErr != nil:
 		plan.Blockers = append(plan.Blockers, "the WinPrep artifact manifest could not be read: "+mErr.Error())
 	default:
 		for _, entry := range manifest.Entries {
-			if err := f.Store.EnsureInsideDataDir(entry.Path); err != nil {
+			if err := c.Store.EnsureInsideDataDir(entry.Path); err != nil {
 				plan.Blockers = append(plan.Blockers, "the artifact manifest records a path outside WinPrep's data directory ("+
-					entry.Path+"); it will not be removed. Check "+f.Store.Path()+" and remove the entry manually.")
+					entry.Path+"); it will not be removed. Check "+c.Store.Path()+" and remove the entry manually.")
 			}
 			if entry.Type == artifacts.TypeRegistry {
 				plan.Blockers = append(plan.Blockers, "the artifact manifest records a registry artifact ("+entry.Path+
@@ -102,14 +102,14 @@ func (f *Flow) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, erro
 	}
 
 	// Demonstration data inside the demo profile.
-	if err := f.planDownloads(&plan, root, facts.User.SID); err != nil {
+	if err := c.planDownloads(&plan, root, facts.User.SID); err != nil {
 		return plan, err
 	}
-	f.planTemp(&plan, root)
+	c.planTemp(&plan, root)
 	for _, b := range browsers {
-		f.planBrowser(&plan, root, b, facts)
+		c.planBrowser(&plan, root, b, facts)
 	}
-	f.planReviewFolders(&plan, root)
+	c.planReviewFolders(&plan, root)
 
 	// The running executable must not sit inside a folder the cleanup empties;
 	// Windows locks running executables, so deletion would fail midway.
@@ -129,8 +129,8 @@ func (f *Flow) BuildCleanupPlan(facts Facts, selfPath string) (CleanupPlan, erro
 // profileRoot resolves the profile directory of the given SID through
 // ProfileList. This is the authoritative source for profile locations, and
 // the resolution happens by SID, never by account name.
-func (f *Flow) profileRoot(sid string) (string, error) {
-	path, ok, err := f.Reg.StringValue(platform.HKLM, profileListKey+`\`+sid, "ProfileImagePath")
+func (c *Controller) profileRoot(sid string) (string, error) {
+	path, ok, err := c.Reg.StringValue(platform.HKLM, profileListKey+`\`+sid, "ProfileImagePath")
 	if err != nil {
 		return "", err
 	}
@@ -145,8 +145,8 @@ func (f *Flow) profileRoot(sid string) (string, error) {
 // redirected or differently named folder is still found; if the redirect
 // points outside the profile, the data is reported for manual review instead
 // of being chased outside the approved scope.
-func (f *Flow) planDownloads(plan *CleanupPlan, root, sid string) error {
-	value, ok, err := f.Reg.StringValue(platform.HKU,
+func (c *Controller) planDownloads(plan *CleanupPlan, root, sid string) error {
+	value, ok, err := c.Reg.StringValue(platform.HKU,
 		sid+"\\"+userShellFolders, downloadsValue)
 	if err != nil {
 		return fmt.Errorf("reading the Downloads location: %w", err)
@@ -169,7 +169,7 @@ func (f *Flow) planDownloads(plan *CleanupPlan, root, sid string) error {
 }
 
 // planTemp adds the demo profile's local Temp folder.
-func (f *Flow) planTemp(plan *CleanupPlan, root string) {
+func (c *Controller) planTemp(plan *CleanupPlan, root string) {
 	addDirContentsTarget(plan, root, "Temporary files", filepath.Join(root, "AppData", "Local", "Temp"))
 }
 
@@ -177,7 +177,7 @@ func (f *Flow) planTemp(plan *CleanupPlan, root string) {
 // A running browser locks its files, so the data becomes a blocker rather
 // than a doomed removal. Extra profiles beyond Default are reported because
 // they are outside the covered scope.
-func (f *Flow) planBrowser(plan *CleanupPlan, root string, b browserDef, facts Facts) {
+func (c *Controller) planBrowser(plan *CleanupPlan, root string, b browserDef, facts Facts) {
 	userData := joinRel(root, b.dataDir)
 	profileDir := filepath.Join(userData, "Default")
 	if _, err := os.Lstat(profileDir); err != nil {
@@ -224,14 +224,14 @@ func (f *Flow) planBrowser(plan *CleanupPlan, root string, b browserDef, facts F
 		}
 		if len(extra) > 0 {
 			plan.Notes = append(plan.Notes, b.name+" has additional profiles ("+strings.Join(extra, ", ")+
-				") that the cleanup does not cover. Review them yourself.")
+				") that the cleanup does not cover. Review them yourselc.")
 		}
 	}
 }
 
 // planReviewFolders counts the shell folders WinPrep deliberately does not
 // touch, so the operator knows what still needs a manual look.
-func (f *Flow) planReviewFolders(plan *CleanupPlan, root string) {
+func (c *Controller) planReviewFolders(plan *CleanupPlan, root string) {
 	for _, name := range reviewFolders {
 		dir := filepath.Join(root, name)
 		entries, err := os.ReadDir(dir)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/developerasaad/winprep/internal/app"
+	"github.com/developerasaad/winprep/internal/handover"
 	"github.com/developerasaad/winprep/internal/platform"
 )
 
@@ -76,7 +77,11 @@ func runPersist(ctx context.Context, a *app.App, io IO) int {
 	return ExitOK
 }
 
-// runClean implements the seven-step handover procedure for the CLI.
+// runClean performs the Clean & Finish procedure for the CLI: inspect,
+// construct the cleanup plan, show both, ask for one deliberate
+// confirmation, and only then execute. Nothing is modified before the
+// confirmation; the same handover.Controller enforces the sequence for the
+// TUI and the fallback menu.
 func runClean(ctx context.Context, a *app.App, io IO, args []string) int {
 	dryRun := false
 	assumeYes := false
@@ -95,24 +100,30 @@ func runClean(ctx context.Context, a *app.App, io IO, args []string) int {
 		}
 	}
 
-	// Steps 1-3: inspect, evaluate, report.
-	result, err := a.Handover.Inspect(ctx)
+	// Inspection and plan construction. Both are read-only.
+	session, err := a.Handover.Begin(ctx)
 	if err != nil {
 		return reportError(io, "inspecting the machine before the handover", err)
 	}
-	fmt.Fprintln(io.Out, "Handover inspection")
-	fmt.Fprintln(io.Out, "===================")
-	for _, line := range result.Explain() {
+	fmt.Fprintln(io.Out, "Clean & Finish - inspection")
+	fmt.Fprintln(io.Out, "==========================")
+	for _, line := range session.Preflight.Explain() {
 		fmt.Fprintln(io.Out, line)
+	}
+	if session.Plan != nil {
+		fmt.Fprintln(io.Out)
+		for _, line := range session.Plan.SummaryLines() {
+			fmt.Fprintln(io.Out, line)
+		}
 	}
 
 	if dryRun {
 		fmt.Fprintln(io.Out)
-		switch result.Verdict {
-		case 0: // VerdictReady
+		switch session.Preflight.Verdict {
+		case handover.VerdictReady:
 			fmt.Fprintln(io.Out, "Dry run: no changes were made. A handover appears possible; run \"winprep clean\" to perform it.")
-		case 1: // VerdictAttention
-			fmt.Fprintln(io.Out, "Dry run: no changes were made. A handover appears possible after the issues above are addressed (or acknowledged).")
+		case handover.VerdictAttention:
+			fmt.Fprintln(io.Out, "Dry run: no changes were made. A handover appears possible after the items above are addressed (or acknowledged).")
 		default:
 			fmt.Fprintln(io.Out, "Dry run: no changes were made. A handover is NOT possible until the issues above are resolved.")
 		}
@@ -120,93 +131,45 @@ func runClean(ctx context.Context, a *app.App, io IO, args []string) int {
 	}
 
 	// A blocked machine stops here, regardless of --yes.
-	if result.Verdict == 2 { // VerdictBlocked
+	if session.Preflight.Verdict == handover.VerdictBlocked {
 		fmt.Fprintln(io.Out)
 		fmt.Fprintln(io.Out, "The handover cannot proceed. Resolve the issues above and run \"winprep clean\" again.")
 		return ExitFail
 	}
 
-	// Step 4: clean WinPrep's own artifacts.
+	// One deliberate confirmation. Cancelling leaves the machine untouched.
 	fmt.Fprintln(io.Out)
-	fmt.Fprintln(io.Out, "Removing WinPrep's own artifacts...")
-	cleanup, err := a.Handover.CleanupArtifacts(ctx)
-	if err != nil {
-		fmt.Fprintln(io.Out, "Cleanup did not complete:", err)
-		fmt.Fprintln(io.Out, "The reseal was NOT started. Resolve the cleanup problem and run \"winprep clean\" again.")
-		return ExitFail
-	}
-	if len(cleanup) == 0 {
-		fmt.Fprintln(io.Out, "Nothing to remove; no WinPrep artifacts were recorded.")
-	} else {
-		for _, c := range cleanup {
-			fmt.Fprintf(io.Out, "  removed: %s\n", c.Entry.Path)
-		}
-	}
-
-	// Step 5: deliberate confirmation.
-	fmt.Fprintln(io.Out)
-	fmt.Fprintln(io.Out, warningBlock())
+	fmt.Fprintln(io.Out, handover.ConfirmationWarning())
 	if !assumeYes {
 		if !io.Interactive {
-			fmt.Fprintln(io.Out, "This command needs confirmation. Read the warnings above, then run:")
+			fmt.Fprintln(io.Out, "This command needs confirmation. Read the plan and warnings above, then run:")
 			fmt.Fprintln(io.Out, "  winprep clean --yes")
-			fmt.Fprintln(io.Out, "The safety checks above still apply; --yes does not bypass them.")
+			fmt.Fprintln(io.Out, "The safety checks above still apply; --yes does not bypass them or expand the plan.")
 			return ExitFail
 		}
-		answer, ok := prompt(io, "Proceed with the handover? [y/N] ")
+		answer, ok := prompt(io, "Proceed with the cleanup and handover? [y/N] ")
 		if !ok || !isAffirmative(answer) {
-			fmt.Fprintln(io.Out, "Cancelled. Nothing further was changed; the laptop was NOT prepared for handover.")
+			fmt.Fprintln(io.Out, "Cancelled. Nothing was changed.")
 			return ExitFail
 		}
 	}
+	session.Approve()
 
-	// Step 6: reseal.
+	// The approved sequence: revalidate, clean, verify, reseal, report.
 	fmt.Fprintln(io.Out)
-	fmt.Fprintln(io.Out, "Starting Sysprep. Do not turn off the laptop while it runs.")
-	res, resealErr := a.Handover.Reseal(ctx)
-	if resealErr != nil {
-		return reportError(io, "running the handover", resealErr)
+	fmt.Fprintln(io.Out, "Removing the approved demonstration data, then resealing Windows...")
+	res, err := session.Execute(ctx)
+	if err != nil {
+		return reportError(io, "running the handover", err)
 	}
-
-	// Step 7: report the real outcome.
 	fmt.Fprintln(io.Out)
-	fmt.Fprintln(io.Out, res.Outcome.String())
-	fmt.Fprintln(io.Out, res.Detail)
-	if res.Outcome.String() == "Sysprep could not start" || res.Outcome.String() == "Sysprep reported an error" {
-		fmt.Fprintln(io.Out)
-		fmt.Fprintln(io.Out, "Sysprep writes details to these logs:")
-		for _, p := range handoverLogPaths() {
-			fmt.Fprintln(io.Out, "  "+p)
-		}
-		fmt.Fprintln(io.Out, "Microsoft's Sysprep troubleshooting guide: https://learn.microsoft.com/en-us/troubleshoot/windows-client/setup-upgrade-and-drivers/sysprep-fails-remove-or-update-store-apps")
-		return ExitFail
+	for _, line := range res.SummaryLines() {
+		fmt.Fprintln(io.Out, line)
 	}
-	return ExitOK
-}
-
-func handoverLogPaths() []string {
-	return []string{
-		`%WINDIR%\System32\Sysprep\Panther\setupact.log`,
-		`%WINDIR%\System32\Sysprep\Panther\setuperr.log`,
-		`%WINDIR%\Panther\setupact.log`,
-		`%WINDIR%\Panther\setuperr.log`,
+	if res.Succeeded() {
+		return ExitOK
 	}
-}
-
-func warningBlock() string {
-	return strings.Join([]string{
-		"You are about to prepare this laptop for handover to a buyer.",
-		"",
-		"  - Windows will be resealed into first-time setup (OOBE) and the laptop is",
-		"    expected to shut down when Sysprep finishes.",
-		"  - The process can fail. If it does, WinPrep will report the error and point",
-		"    you to the Sysprep logs; the laptop will not be prepared.",
-		"  - Sysprep does NOT securely erase data. Files, accounts, and traces from",
-		"    your preparation and customer testing remain on the disk. If the laptop",
-		"    must be wiped, do that separately before selling it.",
-		"  - After the handover, start the laptop once yourself and verify that",
-		"    Windows first-time setup appears, before handing it to the buyer.",
-	}, "\n")
+	return ExitFail
 }
 
 func isAffirmative(s string) bool {

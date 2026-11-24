@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/developerasaad/winprep/internal/artifacts"
 	"github.com/developerasaad/winprep/internal/handover"
@@ -25,6 +26,8 @@ func New() *App {
 		&stubProcessLister{},
 		artifacts.NewStore("."),
 		&stubSysprep{},
+		&stubSysprepMonitor{},
+		&stubInstanceLock{},
 		"",
 	)
 }
@@ -75,6 +78,18 @@ type stubProcessLister struct{}
 
 func (p *stubProcessLister) ProcessNames(context.Context) ([]string, error) {
 	return nil, platform.ErrUnsupportedPlatform
+}
+
+type stubSysprepMonitor struct{}
+
+func (m *stubSysprepMonitor) SysprepLogTimes(context.Context) ([]time.Time, error) {
+	return nil, platform.ErrUnsupportedPlatform
+}
+
+type stubInstanceLock struct{}
+
+func (l *stubInstanceLock) TryLock() (bool, error) {
+	return false, platform.ErrUnsupportedPlatform
 }
 
 type stubSysprep struct{}

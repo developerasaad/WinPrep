@@ -104,10 +104,11 @@ func (s *Service) Inspect(ctx context.Context) (Report, error) {
 					"during \"Clean & Finish\".")
 		}
 		r.Guidance = append(r.Guidance,
-			"When you are ready to sell, run \"Clean & Finish\". It validates the machine, removes WinPrep's "+
-				"own artifacts, and reseals Windows into first-time setup.",
-			"Remove any accounts, files, or tools you created while preparing the laptop yourself; WinPrep will "+
-				"not delete your data.")
+			"When you are ready to sell, run \"Clean & Finish\". It validates the machine, removes the "+
+				"approved demonstration data and WinPrep's own artifacts, and reseals Windows into "+
+				"first-time setup.",
+			"Remove any accounts you created yourself first; WinPrep never deletes accounts. Files outside "+
+				"the approved cleanup scope (Desktop, Documents, and similar) stay where they are.")
 		r.ChangesApplied = nil
 		r.Explanation = append(r.Explanation,
 			"No system changes were made by this command.")

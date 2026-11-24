@@ -25,9 +25,9 @@ type handoverPhase int
 
 const (
 	hoInspect handoverPhase = iota // preflight running
-	hoReview                       // preflight result shown
+	hoReview                       // inspection + cleanup plan shown
 	hoConfirm                      // deliberate confirmation
-	hoReseal                       // cleanup + Sysprep running (not cancellable)
+	hoExecute                      // approved cleanup + reseal running (not cancellable)
 	hoResult                       // final outcome shown
 )
 
@@ -60,21 +60,15 @@ type persistLoadedMsg struct {
 	err    error
 }
 
-type preflightLoadedMsg struct {
-	loadID int
-	result handover.PreflightResult
-	err    error
-}
-
-type cleanupDoneMsg struct {
+type sessionLoadedMsg struct {
 	loadID  int
-	results []handover.CleanupResult
+	session *handover.Session
 	err     error
 }
 
-type resealDoneMsg struct {
+type executeDoneMsg struct {
 	loadID int
-	result handover.ResealResult
+	result handover.Result
 	err    error
 }
 
@@ -116,13 +110,11 @@ type Model struct {
 
 	// handover flow
 	phase         handoverPhase
-	preflight     handover.PreflightResult
-	preflightErr  error
+	session       *handover.Session
+	sessionErr    error
 	confirmChoice int // 0 = Cancel (safe default), 1 = proceed
-	cleanup       []handover.CleanupResult
-	cleanupErr    error
-	reseal        handover.ResealResult
-	resealErr     error
+	result        handover.Result
+	resultErr     error
 
 	// notice is a one-line message shown above the footer (errors, results).
 	notice string
@@ -172,13 +164,10 @@ func (m *Model) start(fn func(ctx context.Context) tea.Msg, what string, cancell
 		case persistLoadedMsg:
 			v.loadID = id
 			return v
-		case preflightLoadedMsg:
+		case sessionLoadedMsg:
 			v.loadID = id
 			return v
-		case cleanupDoneMsg:
-			v.loadID = id
-			return v
-		case resealDoneMsg:
+		case executeDoneMsg:
 			v.loadID = id
 			return v
 		default:
@@ -242,40 +231,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scroll = 0
 		return m, nil
 
-	case preflightLoadedMsg:
+	case sessionLoadedMsg:
 		if m.stale(msg.loadID) {
 			return m, nil
 		}
 		m.finishLoading()
-		m.preflight, m.preflightErr = msg.result, msg.err
+		m.session, m.sessionErr = msg.session, msg.err
 		m.phase = hoReview
 		m.scroll = 0
 		return m, nil
 
-	case cleanupDoneMsg:
-		if m.stale(msg.loadID) {
-			return m, nil
-		}
-		m.cleanup, m.cleanupErr = msg.results, msg.err
-		if m.cleanupErr != nil {
-			// Step 4 failed, so the reseal must not start (step 6 rules).
-			m.finishLoading()
-			m.phase = hoResult
-			m.reseal, m.resealErr = handover.ResealResult{}, nil
-			m.scroll = 0
-			return m, nil
-		}
-		return m, m.start(func(ctx context.Context) tea.Msg {
-			r, err := m.a.Handover.Reseal(ctx)
-			return resealDoneMsg{result: r, err: err}
-		}, "running Sysprep (do not turn off the laptop)", false)
-
-	case resealDoneMsg:
+	case executeDoneMsg:
 		if m.stale(msg.loadID) {
 			return m, nil
 		}
 		m.finishLoading()
-		m.reseal, m.resealErr = msg.result, msg.err
+		m.result, m.resultErr = msg.result, msg.err
 		m.phase = hoResult
 		m.scroll = 0
 		return m, nil
@@ -290,8 +261,8 @@ func (m *Model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Ctrl+C quits unless the handover is mid-run; leaving then would suggest
 	// the reseal itself was cancelled, which it cannot be.
 	if s == "ctrl+c" {
-		if m.screen == screenHandover && m.phase == hoReseal {
-			m.notice = "Sysprep is running; WinPrep stays open until it finishes."
+		if m.screen == screenHandover && m.phase == hoExecute {
+			m.notice = "The cleanup and reseal are running; WinPrep stays open until they finish."
 			return m, nil
 		}
 		m.cancelLoad()
@@ -353,12 +324,12 @@ func (m *Model) menuKey(s string) (tea.Model, tea.Cmd) {
 			m.screen = screenHandover
 			m.phase = hoInspect
 			m.confirmChoice = 0
-			m.cleanup, m.cleanupErr = nil, nil
-			m.reseal, m.resealErr = handover.ResealResult{}, nil
+			m.session, m.sessionErr = nil, nil
+			m.result, m.resultErr = handover.Result{}, nil
 			return m, m.start(func(ctx context.Context) tea.Msg {
-				r, err := m.a.Handover.Inspect(ctx)
-				return preflightLoadedMsg{result: r, err: err}
-			}, "inspecting this laptop before the handover", true)
+				s, err := m.a.Handover.Begin(ctx)
+				return sessionLoadedMsg{session: s, err: err}
+			}, "inspecting this laptop and planning the cleanup", true)
 		case 2: // Help
 			m.screen = screenHelp
 			m.scroll = 0
@@ -401,7 +372,7 @@ func (m *Model) handoverKey(s string) (tea.Model, tea.Cmd) {
 	case hoReview:
 		switch s {
 		case "enter":
-			if m.preflight.Verdict == handover.VerdictBlocked {
+			if m.session == nil || m.session.Preflight.Verdict == handover.VerdictBlocked {
 				m.notice = "The handover cannot proceed; resolve the issues above."
 				return m, nil
 			}
@@ -422,10 +393,10 @@ func (m *Model) handoverKey(s string) (tea.Model, tea.Cmd) {
 			m.screen = screenMenu
 			m.notice = "Cancelled. Nothing was changed."
 		case "y", "Y":
-			return m.beginReseal()
+			return m.beginExecution()
 		case "enter":
 			if m.confirmChoice == 1 {
-				return m.beginReseal()
+				return m.beginExecution()
 			}
 			m.screen = screenMenu
 			m.notice = "Cancelled. Nothing was changed."
@@ -436,16 +407,18 @@ func (m *Model) handoverKey(s string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// beginReseal starts step 4 (cleanup of WinPrep's own artifacts) followed by
-// step 6 (Sysprep). It only runs after a deliberate confirmation, and once
-// started it runs to completion.
-func (m *Model) beginReseal() (tea.Model, tea.Cmd) {
-	m.phase = hoReseal
+// beginExecution approves the reviewed plan and runs the one approved
+// sequence through the shared controller: revalidate, clean, verify, reseal.
+// Once started it runs to completion; the controller ignores interrupts for
+// exactly this window.
+func (m *Model) beginExecution() (tea.Model, tea.Cmd) {
+	m.phase = hoExecute
 	m.scroll = 0
+	m.session.Approve()
 	return m, m.start(func(ctx context.Context) tea.Msg {
-		results, err := m.a.Handover.CleanupArtifacts(ctx)
-		return cleanupDoneMsg{results: results, err: err}
-	}, "removing WinPrep's own artifacts", false)
+		res, err := m.session.Execute(ctx)
+		return executeDoneMsg{result: res, err: err}
+	}, "removing the approved demonstration data and resealing Windows (do not turn off the laptop)", false)
 }
 
 // viewportHeight is the number of content rows available for scrollable
@@ -486,9 +459,9 @@ func (m *Model) viewportLines() []string {
 	case screenHandover:
 		switch m.phase {
 		case hoReview:
-			return wrapLines(renderPreflight(m.preflight, m.preflightErr), w)
+			return wrapLines(renderSessionReview(m.session, m.sessionErr), w)
 		case hoResult:
-			return wrapLines(renderOutcome(m.cleanup, m.cleanupErr, m.reseal, m.resealErr), w)
+			return wrapLines(renderResult(m.result, m.resultErr), w)
 		}
 	}
 	return nil

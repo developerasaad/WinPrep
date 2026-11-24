@@ -3,8 +3,8 @@ package handover
 import (
 	"errors"
 	"testing"
+	"time"
 
-	"github.com/developerasaad/winprep/internal/artifacts"
 	"github.com/developerasaad/winprep/internal/audit"
 	"github.com/developerasaad/winprep/internal/platform"
 )
@@ -21,6 +21,7 @@ func baseFacts() Facts {
 		User:           platform.UserInfo{IsElevated: true, SID: "S-1-5-21-1-2-3-500", IsBuiltinAdmin: true},
 		Audit:          audit.Assessment{State: audit.StateAuditMode, Summary: "audit mode"},
 		SysprepPresent: true,
+		Now:            time.Now(),
 	}
 }
 
@@ -134,13 +135,47 @@ func TestBuildChecksSysprep(t *testing.T) {
 	}
 }
 
-func TestBuildChecksSysprepIdle(t *testing.T) {
+func TestBuildChecksSysprepConflict(t *testing.T) {
+	// No Sysprep process: pass.
 	f := baseFacts()
-	f.SysprepRunning = true
-	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != Blocker {
-		t.Errorf("running sysprep must block, got %v", c.Severity)
+	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != Pass {
+		t.Errorf("no sysprep process should pass, got %v", c.Severity)
 	}
-	f.SysprepRunning = false
+
+	// A sysprep.exe process with freshly written logs is an active operation.
+	f.SysprepRunning = true
+	f.SysprepLogTimes = []time.Time{f.Now.Add(-20 * time.Second)}
+	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != Blocker {
+		t.Errorf("an active Sysprep operation must block, got %v", c.Severity)
+	}
+
+	// A sysprep.exe process whose logs are stale is the idle window Audit
+	// Mode opens at sign-in: attention, not a blocker.
+	f.SysprepLogTimes = []time.Time{f.Now.Add(-48 * time.Hour)}
+	idle := checkByID(BuildChecks(f), "sysprep-idle")
+	if idle.Severity != Attention {
+		t.Errorf("an idle Sysprep window should be attention, got %v", idle.Severity)
+	}
+	if !contains(idle.Detail, "idle") {
+		t.Errorf("the idle case should say so, detail = %q", idle.Detail)
+	}
+
+	// A sysprep.exe process with no logs at all is also treated as idle:
+	// a machine that never ran Sysprep has no Panther logs.
+	f.SysprepLogTimes = nil
+	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != Attention {
+		t.Errorf("a process with no logs should be attention, got %v", c.Severity)
+	}
+
+	// The process exists but its activity cannot be read: unknown, which
+	// blocks like a blocker.
+	f.SysprepLogErr = errors.New("access denied")
+	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != UnknownSeverity {
+		t.Errorf("unreadable log state must be unknown, got %v", c.Severity)
+	}
+
+	// A process listing failure remains unknown.
+	f = baseFacts()
 	f.ProcsErr = errors.New("snapshot failed")
 	if c := checkByID(BuildChecks(f), "sysprep-idle"); c.Severity != UnknownSeverity {
 		t.Errorf("process list failure must be unknown, got %v", c.Severity)
@@ -172,38 +207,34 @@ func TestBuildChecksPendingReboot(t *testing.T) {
 }
 
 func TestBuildChecksAccountsAndProfiles(t *testing.T) {
+	// Extra accounts survive the reseal and would be handed to the buyer,
+	// so they block rather than merely warn.
 	f := baseFacts()
 	f.Accounts = []AccountFact{{Name: "testuser", SID: "S-1-5-21-1-2-3-1001"}}
 	f.Profiles = []ProfileFact{{SID: "S-1-5-21-1-2-3-1001", Path: `C:\Users\testuser`}}
 	checks := BuildChecks(f)
-	if c := checkByID(checks, "accounts"); c.Severity != Attention {
-		t.Errorf("extra account should be attention, got %v", c.Severity)
+	if c := checkByID(checks, "accounts"); c.Severity != Blocker {
+		t.Errorf("extra accounts must block, got %v", c.Severity)
 	}
-	if c := checkByID(checks, "profiles"); c.Severity != Attention {
-		t.Errorf("extra profile should be attention, got %v", c.Severity)
+	if c := checkByID(checks, "profiles"); c.Severity != Blocker {
+		t.Errorf("extra profiles must block, got %v", c.Severity)
 	}
-	if EvaluateVerdict(checks) != VerdictAttention {
-		t.Errorf("attention-only issues should yield attention verdict, got %v", EvaluateVerdict(checks))
+	if EvaluateVerdict(checks) != VerdictBlocked {
+		t.Errorf("extra accounts and profiles must yield a blocked verdict, got %v", EvaluateVerdict(checks))
 	}
 
+	// Orphaned profile folders block as well.
 	f.Accounts = nil
 	f.Profiles = nil
-	f.AccountsErr = errors.New("wmi exploded")
+	f.OrphanDirs = []string{`C:\Users\leftover`}
+	if c := checkByID(BuildChecks(f), "profiles"); c.Severity != Blocker {
+		t.Errorf("orphaned profile folders must block, got %v", c.Severity)
+	}
+
+	f.OrphanDirs = nil
+	f.AccountsErr = errors.New("sam exploded")
 	if c := checkByID(BuildChecks(f), "accounts"); c.Severity != UnknownSeverity {
 		t.Errorf("account query failure must be unknown, got %v", c.Severity)
-	}
-}
-
-func TestBuildChecksArtifactsInformational(t *testing.T) {
-	f := baseFacts()
-	f.Artifacts = []artifacts.Entry{{Type: artifacts.TypeFile, Path: `C:\ProgramData\WinPrep\note.txt`}}
-	checks := BuildChecks(f)
-	c := checkByID(checks, "artifacts")
-	if c.Severity != Pass {
-		t.Errorf("recorded artifacts are informational, got %v", c.Severity)
-	}
-	if EvaluateVerdict(checks) != VerdictReady {
-		t.Error("artifacts alone must not affect the verdict")
 	}
 }
 

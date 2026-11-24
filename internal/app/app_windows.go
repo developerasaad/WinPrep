@@ -28,6 +28,8 @@ func New() *App {
 		sys, reg, run, procs,
 		artifacts.NewStore(dataDir),
 		&windowsSysprep{runner: run},
+		windows.NewSysprepMonitor(),
+		windows.NewInstanceLock(),
 		windows.UsersDir(),
 	)
 }

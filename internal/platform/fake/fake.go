@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/developerasaad/winprep/internal/platform"
 )
@@ -265,6 +266,41 @@ func (s *System) LocalAccounts(context.Context) ([]platform.LocalAccount, error)
 		return nil, s.AccountsErr
 	}
 	return append([]platform.LocalAccount(nil), s.Accounts...), nil
+}
+
+// SysprepMonitor is a fixed platform.SysprepMonitor. LogTimes is returned
+// as the modification times of the existing Sysprep logs.
+type SysprepMonitor struct {
+	LogTimes []time.Time
+	Err      error
+}
+
+// SysprepLogTimes implements platform.SysprepMonitor.
+func (m *SysprepMonitor) SysprepLogTimes(context.Context) ([]time.Time, error) {
+	if m.Err != nil {
+		return nil, m.Err
+	}
+	return append([]time.Time(nil), m.LogTimes...), nil
+}
+
+// InstanceLock is an in-memory platform.InstanceLock. A second TryLock on the
+// same value reports the lock as taken, mirroring the named-mutex behavior
+// within one process.
+type InstanceLock struct {
+	Held bool
+	Err  error
+}
+
+// TryLock implements platform.InstanceLock.
+func (l *InstanceLock) TryLock() (bool, error) {
+	if l.Err != nil {
+		return false, l.Err
+	}
+	if l.Held {
+		return false, nil
+	}
+	l.Held = true
+	return true, nil
 }
 
 // ProcessLister is a fixed platform.ProcessLister.

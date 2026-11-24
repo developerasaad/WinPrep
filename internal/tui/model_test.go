@@ -136,18 +136,22 @@ func TestHandoverHappyPathWithDeliberateConfirm(t *testing.T) {
 		t.Fatalf("handover should be inspecting, phase=%v", m.phase)
 	}
 
-	// Deliver the preflight result (the fixture is a green machine).
-	result, err := f.App.Handover.Inspect(context.Background())
+	// Deliver the session (the fixture is a green machine).
+	session, err := f.App.Handover.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	send(t, m, preflightLoadedMsg{loadID: m.loadID, result: result})
+	send(t, m, sessionLoadedMsg{loadID: m.loadID, session: session})
 	if m.phase != hoReview {
 		t.Fatalf("phase = %v, want hoReview", m.phase)
 	}
 	view := plain(m.View().Content)
 	if !strings.Contains(view, "Overall: Ready") {
 		t.Error("the review should show the verdict")
+	}
+	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnd}) // scroll to the plan below the checks
+	if !strings.Contains(plain(m.View().Content), "Downloads") {
+		t.Error("the review should show the cleanup plan")
 	}
 
 	// Continue to confirmation.
@@ -156,7 +160,14 @@ func TestHandoverHappyPathWithDeliberateConfirm(t *testing.T) {
 		t.Fatalf("phase = %v, want hoConfirm", m.phase)
 	}
 	if m.confirmChoice != 0 {
-		t.Error("confirmation must default to the safe option (go back)")
+		t.Error("confirmation must default to the safe option (Cancel)")
+	}
+	view = plain(m.View().Content)
+	if !strings.Contains(view, "Cancel (nothing happens)") {
+		t.Error("the safe choice must be named Cancel")
+	}
+	if !strings.Contains(view, "not a secure erase") {
+		t.Error("the confirmation must carry the canonical warnings")
 	}
 
 	// The safe default must not start anything.
@@ -165,46 +176,38 @@ func TestHandoverHappyPathWithDeliberateConfirm(t *testing.T) {
 		t.Error("enter on the safe default returns to the menu")
 	}
 	if f.Sysprep.Called {
-		t.Error("the safe default must not start the reseal")
+		t.Error("the safe default must not start the handover")
 	}
 
-	// Walk back in (cursor is still on the handover entry) and confirm
+	// Walk back in (the cursor is still on the handover entry) and confirm
 	// with the explicit Y shortcut.
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	send(t, m, preflightLoadedMsg{loadID: m.loadID, result: result})
+	send(t, m, sessionLoadedMsg{loadID: m.loadID, session: session})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	press(t, m, tea.KeyPressMsg{Code: 'y'})
 
-	if m.phase != hoReseal {
-		t.Fatalf("phase = %v after Y, want hoReseal", m.phase)
+	if m.phase != hoExecute {
+		t.Fatalf("phase = %v after Y, want hoExecute", m.phase)
 	}
 	if m.loading && m.loadingCancellable {
-		t.Error("the reseal phase must not be cancellable")
+		t.Error("the execution phase must not be cancellable")
 	}
 
-	// Ctrl+C is refused while Sysprep runs.
+	// Ctrl+C is refused while the approved operation runs.
 	press(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	if m.phase != hoReseal {
-		t.Error("ctrl+c must not abort the reseal phase")
+	if m.phase != hoExecute {
+		t.Error("ctrl+c must not abort the execution phase")
 	}
-	if !strings.Contains(m.notice, "Sysprep is running") {
-		t.Errorf("ctrl+c during reseal should explain, notice = %q", m.notice)
+	if !strings.Contains(m.notice, "cleanup and reseal are running") {
+		t.Errorf("ctrl+c during execution should explain, notice = %q", m.notice)
 	}
 
-	// Steps 4 and 6 complete.
-	cleanup, cerr := f.App.Handover.CleanupArtifacts(context.Background())
-	if cerr != nil {
-		t.Fatal(cerr)
+	// The approved sequence completes.
+	res, xerr := session.Execute(context.Background())
+	if xerr != nil {
+		t.Fatal(xerr)
 	}
-	send(t, m, cleanupDoneMsg{loadID: m.loadID, results: cleanup})
-	if m.phase != hoReseal {
-		t.Fatalf("cleanup should flow into the reseal, phase = %v", m.phase)
-	}
-	res, rerr := f.App.Handover.Reseal(context.Background())
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	send(t, m, resealDoneMsg{loadID: m.loadID, result: res})
+	send(t, m, executeDoneMsg{loadID: m.loadID, result: res})
 	if m.phase != hoResult {
 		t.Fatalf("phase = %v, want hoResult", m.phase)
 	}
@@ -228,14 +231,14 @@ func TestHandoverBlockedRefusesToContinue(t *testing.T) {
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	result, err := f.App.Handover.Inspect(context.Background())
+	session, err := f.App.Handover.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Verdict != handover.VerdictBlocked {
-		t.Fatalf("fixture should be blocked, verdict = %v", result.Verdict)
+	if session.Preflight.Verdict != handover.VerdictBlocked {
+		t.Fatalf("fixture should be blocked, verdict = %v", session.Preflight.Verdict)
 	}
-	send(t, m, preflightLoadedMsg{loadID: m.loadID, result: result})
+	send(t, m, sessionLoadedMsg{loadID: m.loadID, session: session})
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.phase != hoReview {
@@ -258,20 +261,19 @@ func TestHandoverSysprepErrorShowsLogs(t *testing.T) {
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	result, err := f.App.Handover.Inspect(context.Background())
+	session, err := f.App.Handover.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	send(t, m, preflightLoadedMsg{loadID: m.loadID, result: result})
+	send(t, m, sessionLoadedMsg{loadID: m.loadID, session: session})
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	press(t, m, tea.KeyPressMsg{Code: 'y'})
 
-	send(t, m, cleanupDoneMsg{loadID: m.loadID})
-	res, rerr := f.App.Handover.Reseal(context.Background())
-	if rerr != nil {
-		t.Fatal(rerr)
+	res, xerr := session.Execute(context.Background())
+	if xerr != nil {
+		t.Fatal(xerr)
 	}
-	send(t, m, resealDoneMsg{loadID: m.loadID, result: res})
+	send(t, m, executeDoneMsg{loadID: m.loadID, result: res})
 
 	press(t, m, tea.KeyPressMsg{Code: tea.KeyEnd}) // ensure the tail is visible
 	view := plain(m.View().Content)

@@ -82,95 +82,58 @@ func runFallbackAction(w *bufio.Writer, reader *bufio.Reader, what string, fn fu
 	fmt.Fprintln(w)
 }
 
-// runFallbackHandover performs the handover steps with plain-text prompts.
+// runFallbackHandover performs Clean & Finish with plain-text prompts,
+// driving the same controller sequence as the CLI and the full-screen TUI:
+// inspect, plan, one deliberate confirmation, execute, report. Nothing is
+// modified before the confirmation.
 func runFallbackHandover(ctx context.Context, a *app.App, w *bufio.Writer, reader *bufio.Reader) {
-	result, err := a.Handover.Inspect(ctx)
+	session, err := a.Handover.Begin(ctx)
 	if err != nil {
 		reportFallbackError(w, "inspecting the machine before the handover", err)
 		return
 	}
-	fmt.Fprintln(w, "Handover inspection")
-	fmt.Fprintln(w, "===================")
-	for _, l := range result.Explain() {
+	fmt.Fprintln(w, "Clean & Finish - inspection")
+	fmt.Fprintln(w, "==========================")
+	for _, l := range session.Preflight.Explain() {
 		fmt.Fprintln(w, l)
+	}
+	if session.Plan != nil {
+		fmt.Fprintln(w)
+		for _, l := range session.Plan.SummaryLines() {
+			fmt.Fprintln(w, l)
+		}
 	}
 	fmt.Fprintln(w)
 
-	switch result.Verdict {
-	case handover.VerdictBlocked:
+	if session.Preflight.Verdict == handover.VerdictBlocked {
 		fmt.Fprintln(w, "The handover cannot proceed. Resolve the issues above and try again.")
 		fmt.Fprintln(w)
 		return
-	case handover.VerdictReady:
-		// Nothing extra to say.
-	default:
-		if !askYes(w, reader, "There are items requiring attention. Review them above, then continue? [y/N] ", false) {
-			fmt.Fprintln(w, "Cancelled. Nothing was changed.")
-			fmt.Fprintln(w)
-			return
-		}
 	}
 
-	fmt.Fprintln(w, "Removing WinPrep's own artifacts...")
-	cleanup, cerr := a.Handover.CleanupArtifacts(ctx)
-	if cerr != nil {
-		fmt.Fprintln(w, "Cleanup did not complete: "+cerr.Error())
-		fmt.Fprintln(w, "The reseal was NOT started. Resolve the cleanup problem and try again.")
+	for _, l := range strings.Split(handover.ConfirmationWarning(), "\n") {
+		fmt.Fprintln(w, l)
+	}
+	fmt.Fprintln(w)
+	if !askYes(w, reader, "Proceed with the cleanup and handover? [y/N] ", false) {
+		fmt.Fprintln(w, "Cancelled. Nothing was changed.")
 		fmt.Fprintln(w)
 		return
 	}
-	if len(cleanup) == 0 {
-		fmt.Fprintln(w, "Nothing to remove; no WinPrep artifacts were recorded.")
-	} else {
-		for _, c := range cleanup {
-			fmt.Fprintln(w, "  removed: "+c.Entry.Path)
-		}
-	}
-	fmt.Fprintln(w)
+	session.Approve()
 
-	if !askYes(w, reader, proceedQuestion(), false) {
-		fmt.Fprintln(w, "Cancelled. Nothing further was changed; the laptop was NOT prepared for handover.")
+	fmt.Fprintln(w, "Removing the approved demonstration data, then resealing Windows...")
+	res, xerr := session.Execute(ctx)
+	fmt.Fprintln(w)
+	if xerr != nil {
+		fmt.Fprintln(w, "Error: "+xerr.Error())
 		fmt.Fprintln(w)
 		return
 	}
-
-	fmt.Fprintln(w, "Starting Sysprep. Do not turn off the laptop while it runs.")
-	res, rerr := a.Handover.Reseal(ctx)
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, res.Outcome.String())
-	if res.Detail != "" {
-		fmt.Fprintln(w, res.Detail)
-	}
-	if rerr != nil {
-		fmt.Fprintln(w, "Error: "+rerr.Error())
-	}
-	if res.Outcome != handover.ResealInitiated {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Sysprep writes details to these logs:")
-		for _, p := range handover.PantherLogPaths() {
-			fmt.Fprintln(w, "  "+p)
-		}
+	for _, l := range res.SummaryLines() {
+		fmt.Fprintln(w, l)
 	}
 	fmt.Fprintln(w)
-}
-
-// proceedQuestion is the confirmation text, shared verbatim with the CLI so
-// both interfaces warn identically.
-func proceedQuestion() string {
-	return strings.Join([]string{
-		"You are about to prepare this laptop for handover to a buyer.",
-		"  - Windows will be resealed into first-time setup (OOBE) and the laptop is",
-		"    expected to shut down when Sysprep finishes.",
-		"  - The process can fail. If it does, WinPrep will report the error and point",
-		"    you to the Sysprep logs; the laptop will not be prepared.",
-		"  - Sysprep does NOT securely erase data. Files, accounts, and traces from",
-		"    your preparation and customer testing remain on the disk. If the laptop",
-		"    must be wiped, do that separately before selling it.",
-		"  - After the handover, start the laptop once yourself and verify that",
-		"    Windows first-time setup appears, before handing it to the buyer.",
-		"",
-		"Proceed with the handover? [y/N] ",
-	}, "\n")
 }
 
 // askYes asks a yes/no question. defaultYes selects the answer for an empty

@@ -63,10 +63,10 @@ func TestFallbackHandoverDeclined(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit = %d, want 0", code)
 	}
-	if !strings.Contains(out, "Handover inspection") {
+	if !strings.Contains(out, "Clean & Finish - inspection") {
 		t.Error("the inspection must be shown")
 	}
-	if !strings.Contains(out, "Cancelled. Nothing further was changed") {
+	if !strings.Contains(out, "Cancelled. Nothing was changed") {
 		t.Error("a declined handover must be reported as cancelled")
 	}
 	if f.Sysprep.Called {
@@ -83,7 +83,7 @@ func TestFallbackHandoverConfirmed(t *testing.T) {
 	if !strings.Contains(out, "Reseal initiated") {
 		t.Error("a confirmed handover should report the initiated reseal")
 	}
-	if !strings.Contains(out, "Sysprep does NOT securely erase data") {
+	if !strings.Contains(out, "Sysprep is not a secure erase") {
 		t.Error("the confirmation must include the honest warnings")
 	}
 	if !f.Sysprep.Called {

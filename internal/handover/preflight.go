@@ -10,8 +10,8 @@ package handover
 import (
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/developerasaad/winprep/internal/artifacts"
 	"github.com/developerasaad/winprep/internal/audit"
 	"github.com/developerasaad/winprep/internal/platform"
 )
@@ -92,22 +92,28 @@ type Facts struct {
 	User   platform.UserInfo
 	Audit  audit.Assessment
 
-	Accounts          []AccountFact
-	AccountsErr       error
-	Profiles          []ProfileFact
-	ProfilesErr       error
-	OrphanDirs        []string
-	SysprepPresent    bool
-	SysprepErr        error
-	SysprepRunning    bool
-	ProcessNames      []string
-	ProcsErr          error
+	Accounts       []AccountFact
+	AccountsErr    error
+	Profiles       []ProfileFact
+	ProfilesErr    error
+	OrphanDirs     []string
+	SysprepPresent bool
+	SysprepErr     error
+	SysprepRunning bool
+	ProcessNames   []string
+	ProcsErr       error
+	// SysprepLogTimes are the modification times of the existing Sysprep
+	// logs, used to distinguish an idle System Preparation Tool window from
+	// an operation in progress.
+	SysprepLogTimes   []time.Time
+	SysprepLogErr     error
 	PendingCBSReboot  bool
 	PendingWUReboot   bool
 	PendingFileRename bool
 	RebootErr         error
-	Artifacts         []artifacts.Entry
-	ArtifactsErr      error
+	// Now is the moment the facts were gathered, so log freshness can be
+	// judged without hidden clock reads in the pure check evaluation.
+	Now time.Time
 }
 
 // Check is one evaluated preflight check.
@@ -224,19 +230,35 @@ func BuildChecks(f Facts) []Check {
 			NextStep: "This Windows installation appears incomplete. Reinstall Windows before preparing the laptop."})
 	}
 
-	// 5. Sysprep not already running.
+	// 5. Sysprep conflict. A sysprep.exe process can be the idle System
+	// Preparation Tool window that Audit Mode opens at every sign-in, so the
+	// process alone no longer blocks the inspection. Fresh Panther-log writes
+	// mean the engine is working right now, which blocks; stale or absent
+	// logs mean the window is idle, which is called out for the operator to
+	// close before the final step. The execution gate later refuses to launch
+	// while any sysprep.exe process is alive, so an idle window can never turn
+	// into two overlapping operations.
 	switch {
 	case f.ProcsErr != nil:
-		add(Check{ID: "sysprep-idle", Title: "Sysprep not already running", Severity: UnknownSeverity,
+		add(Check{ID: "sysprep-idle", Title: "No active Sysprep operation", Severity: UnknownSeverity,
 			Detail:   "Could not list running processes: " + f.ProcsErr.Error(),
 			NextStep: "Close any Sysprep windows and try again."})
-	case f.SysprepRunning:
-		add(Check{ID: "sysprep-idle", Title: "Sysprep not already running", Severity: Blocker,
-			Detail:   "A Sysprep process is already running. Two Sysprep operations must never overlap.",
-			NextStep: "Finish or close the existing Sysprep process, then run \"Ready for buyer\" again."})
-	default:
-		add(Check{ID: "sysprep-idle", Title: "Sysprep not already running", Severity: Pass,
+	case !f.SysprepRunning:
+		add(Check{ID: "sysprep-idle", Title: "No active Sysprep operation", Severity: Pass,
 			Detail: "No Sysprep process is running."})
+	case f.SysprepLogErr != nil:
+		add(Check{ID: "sysprep-idle", Title: "No active Sysprep operation", Severity: UnknownSeverity,
+			Detail:   "A Sysprep process is running and its activity could not be read: " + f.SysprepLogErr.Error(),
+			NextStep: "Close the System Preparation Tool window and try again."})
+	case sysprepActive(f):
+		add(Check{ID: "sysprep-idle", Title: "No active Sysprep operation", Severity: Blocker,
+			Detail:   "A Sysprep operation appears to be in progress: its logs were written seconds ago. Two Sysprep operations must never overlap.",
+			NextStep: "Wait for it to finish (the machine may shut down), then run \"Clean & Finish\" again."})
+	default:
+		add(Check{ID: "sysprep-idle", Title: "No active Sysprep operation", Severity: Attention,
+			Detail: "The System Preparation Tool window is open but idle (its logs have not been written recently).",
+			NextStep: "Close the window yourself before the final step; WinPrep never closes it, because an " +
+				"interrupted Sysprep operation can leave Windows in a broken state."})
 	}
 
 	// 6. Pending servicing operations. A pending Component Based Servicing or
@@ -270,8 +292,10 @@ func BuildChecks(f Facts) []Check {
 			Detail: "No pending restart indicators were found."})
 	}
 
-	// 7. Local accounts beyond the built-in ones. WinPrep never deletes
-	// accounts; the operator must remove them manually.
+	// 7. Local accounts beyond the built-in ones. The reseal does not remove
+	// accounts, so any extra account survives the handover and would be
+	// handed to the buyer; WinPrep never deletes accounts itself, so the
+	// operator must remove them first.
 	switch {
 	case f.AccountsErr != nil:
 		add(Check{ID: "accounts", Title: "No extra local accounts", Severity: UnknownSeverity,
@@ -290,14 +314,16 @@ func BuildChecks(f Facts) []Check {
 			}
 			names = append(names, label)
 		}
-		add(Check{ID: "accounts", Title: "No extra local accounts", Severity: Attention,
-			Detail: "Additional local accounts exist: " + strings.Join(names, ", ") + ". Sysprep does not remove " +
-				"accounts or their files, and WinPrep will not delete them for you.",
-			NextStep: "Remove these accounts in Settings > Accounts (or netplwiz) and delete their files, then run " +
-				"\"Ready for buyer\" again. To continue anyway, acknowledge this at the confirmation step."})
+		add(Check{ID: "accounts", Title: "No extra local accounts", Severity: Blocker,
+			Detail: "Additional local accounts exist: " + strings.Join(names, ", ") + ". They survive the reseal " +
+				"and would be handed to the buyer with the laptop.",
+			NextStep: "Remove these accounts in Settings > Accounts (or lusrmgr.msc) and let Windows delete their " +
+				"data, then run \"Clean & Finish\" again. WinPrep never deletes accounts itself."})
 	}
 
-	// 8. User profiles beyond the built-in set.
+	// 8. User profiles beyond the built-in set. Profile data survives the
+	// reseal, so leftover profiles or orphaned profile folders undermine the
+	// handover and must be removed through Windows' own profile management.
 	switch {
 	case f.ProfilesErr != nil:
 		add(Check{ID: "profiles", Title: "No extra user profiles", Severity: UnknownSeverity,
@@ -314,33 +340,28 @@ func BuildChecks(f Facts) []Check {
 		for _, d := range f.OrphanDirs {
 			details = append(details, fmt.Sprintf("folder without a registered profile: %s", d))
 		}
-		add(Check{ID: "profiles", Title: "No extra user profiles", Severity: Attention,
-			Detail: "Additional user data is present: " + strings.Join(details, "; ") + ". Sysprep does not remove " +
-				"profile folders or their contents.",
-			NextStep: "Review and remove these profiles and their folders manually before selling the laptop. To " +
-				"continue anyway, acknowledge this at the confirmation step."})
-	}
-
-	// 9. WinPrep's own artifacts. Informational: they are removed during the
-	// handover.
-	switch {
-	case f.ArtifactsErr != nil:
-		add(Check{ID: "artifacts", Title: "WinPrep artifacts", Severity: UnknownSeverity,
-			Detail:   "Could not read the WinPrep artifact manifest: " + f.ArtifactsErr.Error(),
-			NextStep: "Check %ProgramData%\\WinPrep\\managed-artifacts.json manually, then try again."})
-	case len(f.Artifacts) == 0:
-		add(Check{ID: "artifacts", Title: "WinPrep artifacts", Severity: Pass,
-			Detail: "WinPrep has no recorded changes to clean up."})
-	default:
-		paths := make([]string, 0, len(f.Artifacts))
-		for _, e := range f.Artifacts {
-			paths = append(paths, e.Path)
-		}
-		add(Check{ID: "artifacts", Title: "WinPrep artifacts", Severity: Pass,
-			Detail: "WinPrep will remove its recorded changes: " + strings.Join(paths, ", ") + "."})
+		add(Check{ID: "profiles", Title: "No extra user profiles", Severity: Blocker,
+			Detail: "Additional user data is present: " + strings.Join(details, "; ") + ". Profile folders survive " +
+				"the reseal and WinPrep does not delete them.",
+			NextStep: "Remove these profiles through Windows (Settings > Accounts, or System Properties > " +
+				"User Profiles) so their data is cleaned up by Windows itself, then run \"Clean & Finish\" again."})
 	}
 
 	return checks
+}
+
+// sysprepActive reports whether the Sysprep logs were written recently enough
+// that an operation looks to be in progress. The window is generous (90
+// seconds) on purpose: a false "active" only delays the handover until the
+// logs age out, while a false "idle" could overlap two operations.
+func sysprepActive(f Facts) bool {
+	for _, t := range f.SysprepLogTimes {
+		age := f.Now.Sub(t)
+		if age >= 0 && age <= 90*time.Second {
+			return true
+		}
+	}
+	return false
 }
 
 // Issues returns only the checks that need operator attention, in check order.

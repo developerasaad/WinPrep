@@ -74,8 +74,8 @@ func PantherLogPaths() []string {
 // only for pre-launch setup; the Sysprep invocation itself is deliberately
 // not cancellable, because killing Sysprep mid-run can leave Windows in a
 // broken deployment state.
-func (f *Flow) Reseal(ctx context.Context) (ResealResult, error) {
-	path, err := f.Sysprep.SysprepPath()
+func (c *Controller) Reseal(ctx context.Context) (ResealResult, error) {
+	path, err := c.Sysprep.SysprepPath()
 	if err != nil {
 		return ResealResult{
 			Outcome: ResealLaunchFailed,
@@ -83,7 +83,7 @@ func (f *Flow) Reseal(ctx context.Context) (ResealResult, error) {
 		}, nil
 	}
 
-	exitCode, err := f.Sysprep.RunReseal(context.WithoutCancel(ctx))
+	exitCode, err := c.Sysprep.RunReseal(context.WithoutCancel(ctx))
 	if err != nil {
 		return ResealResult{
 			Outcome: ResealLaunchFailed,

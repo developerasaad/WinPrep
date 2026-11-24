@@ -8,6 +8,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrUnsupportedPlatform is returned by services when WinPrep is running on an
@@ -130,6 +131,27 @@ type System interface {
 // detect a running Sysprep instance; it must not spawn external tools.
 type ProcessLister interface {
 	ProcessNames(ctx context.Context) ([]string, error)
+}
+
+// SysprepMonitor reports evidence of Sysprep engine activity. WinPrep uses
+// the last-write times of the Sysprep Panther logs to tell an idle System
+// Preparation Tool window (open, doing nothing) from an operation in
+// progress: while the engine works, it writes these logs continuously.
+type SysprepMonitor interface {
+	// SysprepLogTimes returns the modification times of the existing
+	// Sysprep logs. Absent logs are omitted; a read failure is an error.
+	SysprepLogTimes(ctx context.Context) ([]time.Time, error)
+}
+
+// InstanceLock is a machine-wide mutual-exclusion primitive. WinPrep holds
+// it for the duration of an approved Clean & Finish run so two processes
+// can never clean and reseal the same machine at once.
+type InstanceLock interface {
+	// TryLock acquires the lock and reports whether it was free. The
+	// lock is held until the process exits; there is deliberately no
+	// unlock, because a half-finished handover must not be re-entered
+	// by a second instance racing the first.
+	TryLock() (bool, error)
 }
 
 // AuditSignals holds the raw Windows setup-state values used to determine the

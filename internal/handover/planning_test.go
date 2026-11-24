@@ -47,8 +47,8 @@ func demoFacts(names ...string) Facts {
 }
 
 func TestPlanHappyPath(t *testing.T) {
-	flow, _, _, store := newTestFlowWithRegistry(t, auditReadyRegistry())
-	root := setupDemoMachine(t, flow.Reg.(*fake.Registry),
+	c, reg, _, _, store := newTestController(t, auditReadyRegistry())
+	root := setupDemoMachine(t, reg,
 		"Downloads", "AppData/Local/Temp", "Desktop",
 		"AppData/Local/Microsoft/Edge/User Data/Default/Cache",
 		"AppData/Local/Microsoft/Edge/User Data/Default/Network",
@@ -60,7 +60,7 @@ func TestPlanHappyPath(t *testing.T) {
 	writeFile(t, filepath.Join(root, "AppData/Local/Microsoft/Edge/User Data/Default/Network/Cookies"), 512)
 	writeFile(t, filepath.Join(root, "Desktop", "notes.txt"), 10)
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatalf("BuildCleanupPlan: %v", err)
 	}
@@ -116,29 +116,29 @@ func TestPlanHappyPath(t *testing.T) {
 }
 
 func TestPlanRequiresRID500Session(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
+	c, _, _, _, _ := newTestController(t, auditReadyRegistry())
 	facts := demoFacts()
 	facts.User.SID = "S-1-5-21-1-2-3-1013"
-	if _, err := flow.BuildCleanupPlan(facts, ""); err == nil {
+	if _, err := c.BuildCleanupPlan(facts, ""); err == nil {
 		t.Fatal("a non-RID-500 session must not produce a cleanup plan")
 	}
 }
 
 func TestPlanMissingProfileRegistration(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	_, err := flow.BuildCleanupPlan(demoFacts(), "")
+	c, _, _, _, _ := buildControllerParts(t, auditReadyRegistry())
+	_, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err == nil || !strings.Contains(err.Error(), "no profile is registered") {
 		t.Fatalf("missing ProfileList entry must be an error, got %v", err)
 	}
 }
 
 func TestPlanRedirectedDownloadsIsNotFollowed(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	setupDemoMachine(t, flow.Reg.(*fake.Registry), "Downloads")
+	c, reg, _, _, _ := newTestController(t, auditReadyRegistry())
+	setupDemoMachine(t, reg, "Downloads")
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere", "Downloads")
-	flow.Reg.(*fake.Registry).SetString(platform.HKU, testSID+`\`+userShellFolders, downloadsValue, elsewhere)
+	reg.SetString(platform.HKU, testSID+`\`+userShellFolders, downloadsValue, elsewhere)
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,13 +159,13 @@ func TestPlanRedirectedDownloadsIsNotFollowed(t *testing.T) {
 }
 
 func TestPlanMissingDownloadsValueFallsBack(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	root := setupDemoMachine(t, flow.Reg.(*fake.Registry), "Downloads")
+	c, reg, _, _, _ := newTestController(t, auditReadyRegistry())
+	root := setupDemoMachine(t, reg, "Downloads")
 	// Overwrite the GUID value with an empty string, which the planner
 	// treats as absent.
-	flow.Reg.(*fake.Registry).SetString(platform.HKU, testSID+`\`+userShellFolders, downloadsValue, "")
+	reg.SetString(platform.HKU, testSID+`\`+userShellFolders, downloadsValue, "")
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,8 +178,8 @@ func TestPlanMissingDownloadsValueFallsBack(t *testing.T) {
 }
 
 func TestPlanTamperedManifestBlocks(t *testing.T) {
-	flow, _, _, store := newTestFlowWithRegistry(t, auditReadyRegistry())
-	setupDemoMachine(t, flow.Reg.(*fake.Registry))
+	c, reg, _, _, store := newTestController(t, auditReadyRegistry())
+	setupDemoMachine(t, reg)
 	m := artifacts.Manifest{}
 	m.Add(artifacts.Entry{Type: artifacts.TypeFile, Path: filepath.Join(t.TempDir(), "outside.txt")})
 	m.Add(artifacts.Entry{Type: artifacts.TypeRegistry, Path: store.Dir + `\startup`})
@@ -187,7 +187,7 @@ func TestPlanTamperedManifestBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,12 +204,12 @@ func TestPlanTamperedManifestBlocks(t *testing.T) {
 }
 
 func TestPlanManifestReadFailureBlocks(t *testing.T) {
-	flow, _, _, store := newTestFlowWithRegistry(t, auditReadyRegistry())
-	setupDemoMachine(t, flow.Reg.(*fake.Registry))
+	c, reg, _, _, store := newTestController(t, auditReadyRegistry())
+	setupDemoMachine(t, reg)
 	if err := os.WriteFile(store.Path(), []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +219,11 @@ func TestPlanManifestReadFailureBlocks(t *testing.T) {
 }
 
 func TestPlanBrowserRunningBlocks(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	root := setupDemoMachine(t, flow.Reg.(*fake.Registry),
+	c, reg, _, _, _ := newTestController(t, auditReadyRegistry())
+	root := setupDemoMachine(t, reg,
 		"AppData/Local/Microsoft/Edge/User Data/Default/Cache")
 
-	plan, err := flow.BuildCleanupPlan(demoFacts("explorer.exe", "msedge.exe"), "")
+	plan, err := c.BuildCleanupPlan(demoFacts("explorer.exe", "msedge.exe"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,12 +242,12 @@ func TestPlanBrowserRunningBlocks(t *testing.T) {
 }
 
 func TestPlanExtraBrowserProfilesAreNoted(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	setupDemoMachine(t, flow.Reg.(*fake.Registry),
+	c, reg, _, _, _ := newTestController(t, auditReadyRegistry())
+	setupDemoMachine(t, reg,
 		"AppData/Local/Microsoft/Edge/User Data/Default/Cache",
 		"AppData/Local/Microsoft/Edge/User Data/Profile 1")
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,11 +263,11 @@ func TestPlanExtraBrowserProfilesAreNoted(t *testing.T) {
 }
 
 func TestPlanRunningExeInsideTargetBlocks(t *testing.T) {
-	flow, _, _, _ := newTestFlowWithRegistry(t, auditReadyRegistry())
-	root := setupDemoMachine(t, flow.Reg.(*fake.Registry), "Downloads")
+	c, reg, _, _, _ := newTestController(t, auditReadyRegistry())
+	root := setupDemoMachine(t, reg, "Downloads")
 	self := filepath.Join(root, "Downloads", "winprep.exe")
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), self)
+	plan, err := c.BuildCleanupPlan(demoFacts(), self)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,13 +280,13 @@ func TestPlanRunningExeInsideTargetBlocks(t *testing.T) {
 }
 
 func TestPlanEmptyMachine(t *testing.T) {
-	flow, _, _, store := newTestFlowWithRegistry(t, auditReadyRegistry())
-	setupDemoMachine(t, flow.Reg.(*fake.Registry))
+	c, reg, _, _, store := newTestController(t, auditReadyRegistry())
+	setupDemoMachine(t, reg)
 	if err := os.RemoveAll(store.Dir); err != nil {
 		t.Fatal(err)
 	}
 
-	plan, err := flow.BuildCleanupPlan(demoFacts(), "")
+	plan, err := c.BuildCleanupPlan(demoFacts(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

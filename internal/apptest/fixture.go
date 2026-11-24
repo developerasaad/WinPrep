@@ -51,6 +51,13 @@ type Fixture struct {
 	Procs   *fake.ProcessLister
 	Sysprep *FakeSysprep
 	Store   *artifacts.Store
+	// SysprepLogs feeds the idle-versus-active distinction.
+	SysprepLogs *fake.SysprepMonitor
+	// Lock simulates the machine-wide operation mutex.
+	Lock *fake.InstanceLock
+	// DemoProfile is the built-in Administrator's profile root: the
+	// demonstration environment the cleanup plan works on.
+	DemoProfile string
 }
 
 // New returns a fixture whose machine is a plausible Audit Mode laptop:
@@ -62,17 +69,42 @@ func New(dataDir string) *Fixture {
 	// for instance, carries a runneradmin profile), which would flip the
 	// preflight verdict from Ready to "requires attention" and make the
 	// presentation tests fail only on Windows.
-	usersDir := filepath.Join(dataDir, "profiles-root")
+	// The profiles root sits beside (not inside) the data directory so the
+	// cleanup plan's two scopes stay disjoint, exactly as C:\Users and
+	// C:\ProgramData\WinPrep are on a real machine. It must also be a
+	// controlled directory, never the real C:\Users: the handover inspection
+	// globs it on the live filesystem, and a real Windows machine always has
+	// extra folders there (the GitHub runner, for instance, carries a
+	// runneradmin profile), which would flip the preflight verdict and make
+	// the presentation tests fail only on Windows.
+	usersDir := filepath.Join(filepath.Dir(dataDir), "profiles-root")
 	if err := os.MkdirAll(usersDir, 0o755); err != nil {
 		// dataDir comes from t.TempDir(); failing here means the test
 		// environment is broken, not the code under test.
 		panic("apptest: creating the profiles root: " + err.Error())
 	}
 
+	// The demo profile is the built-in Administrator's profile under the
+	// profiles root, registered by SID like a real machine. Downloads and the
+	// local Temp folder exist but start empty, so a default fixture produces
+	// an empty but well-formed cleanup plan.
+	demoProfile := filepath.Join(usersDir, "Administrator")
+	for _, d := range []string{
+		filepath.Join(demoProfile, "Downloads"),
+		filepath.Join(demoProfile, "AppData", "Local", "Temp"),
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			panic("apptest: creating the demo profile: " + err.Error())
+		}
+	}
+
 	reg := fake.NewRegistry().
 		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State`, "StateName", "IMAGE_STATE_UNDEPLOYABLE").
 		SetString(platform.HKLM, `SYSTEM\Setup`, "CmdLine", "audit.exe").
-		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "SystemSetupInProgress", 1)
+		SetDWORD(platform.HKLM, `SYSTEM\Setup`, "SystemSetupInProgress", 1).
+		SetString(platform.HKLM, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\`+adminSID, "ProfileImagePath", demoProfile).
+		SetString(platform.HKU, adminSID+`\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders`,
+			"{374DE290-123F-4565-9164-39C4925E467B}", filepath.Join(demoProfile, "Downloads"))
 
 	sys := &fake.System{
 		Sys: platform.SystemInfo{
@@ -93,17 +125,25 @@ func New(dataDir string) *Fixture {
 	run := fake.NewRunner()
 
 	f := &Fixture{
-		Sys:     sys,
-		Reg:     reg,
-		Run:     run,
-		Procs:   &fake.ProcessLister{},
-		Sysprep: &FakeSysprep{},
-		Store:   artifacts.NewStore(dataDir),
+		Sys:         sys,
+		Reg:         reg,
+		Run:         run,
+		Procs:       &fake.ProcessLister{},
+		Sysprep:     &FakeSysprep{},
+		Store:       artifacts.NewStore(dataDir),
+		SysprepLogs: &fake.SysprepMonitor{},
+		Lock:        &fake.InstanceLock{},
+		DemoProfile: demoProfile,
 	}
 	f.App = app.Assemble(
 		sys, reg, run, f.Procs, f.Store,
 		f.Sysprep,
+		f.SysprepLogs,
+		f.Lock,
 		usersDir,
 	)
 	return f
 }
+
+// adminSID is the built-in Administrator of the fixture's machine.
+const adminSID = "S-1-5-21-1-2-3-500"
