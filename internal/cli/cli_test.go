@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/developerasaad/winprep/internal/apptest"
+	"github.com/developerasaad/winprep/internal/platform"
 )
 
 // newIO returns a CLI IO pair with captured output.
@@ -57,7 +59,7 @@ func TestVersion(t *testing.T) {
 		if !strings.Contains(s, "winprep 0.2.0") {
 			t.Errorf("%s: version output = %q", cmd, s)
 		}
-		if !strings.Contains(s, "linux/amd64") && !strings.Contains(s, "windows/amd64") {
+		if !strings.Contains(s, runtime.GOOS+"/"+runtime.GOARCH) {
 			t.Errorf("%s: version output should name the build target: %q", cmd, s)
 		}
 	}
@@ -268,10 +270,59 @@ func TestCleanDryRunLeavesEveryFileInPlace(t *testing.T) {
 	if f.Sysprep.Called {
 		t.Error("dry run must never invoke Sysprep")
 	}
-	if !strings.Contains(out.String(), demoFile) == false {
-		// The plan should have counted the file without touching it.
-		if !strings.Contains(out.String(), "Downloads") || !strings.Contains(out.String(), "1 items") {
-			t.Error("the dry run should preview what would be removed")
+	// The plan should have counted the file without touching it.
+	if !strings.Contains(out.String(), "Downloads") || !strings.Contains(out.String(), "1 items") {
+		t.Errorf("the dry run should preview what would be removed:\n%s", out.String())
+	}
+}
+
+func TestSignalsReportsRawValuesAndEvaluation(t *testing.T) {
+	f := apptest.New(t.TempDir())
+	io, out, _ := newIO("", false)
+	code := Run(t.Context(), f.App, io, []string{"signals"})
+	if code != ExitOK {
+		t.Errorf("exit = %d, want %d", code, ExitOK)
+	}
+	s := out.String()
+	// The report must show the raw values at their documented locations...
+	for _, want := range []string{
+		`Setup\State\ImageState = IMAGE_STATE_UNDEPLOYABLE`,
+		`Setup\State\StateName = (not present)`,
+		`State\State.ini [State] ImageState = IMAGE_STATE_UNDEPLOYABLE`,
+		`HKLM\SYSTEM\Setup\Status\AuditBoot = 1`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("signals output should contain %q:\n%s", want, s)
 		}
+	}
+	// ...and the evaluation, including how each signal was used.
+	if !strings.Contains(s, "Audit Mode (confirmed)") {
+		t.Errorf("signals output should state the evaluated state:\n%s", s)
+	}
+	if !strings.Contains(s, "primary") || !strings.Contains(s, "corroborating") {
+		t.Errorf("signals output should explain how each signal was used:\n%s", s)
+	}
+	if !strings.Contains(s, "No changes were made") {
+		t.Error("signals output must state that it changed nothing")
+	}
+}
+
+func TestSignalsNamesFailingCheckOnRejectedMachine(t *testing.T) {
+	f := apptest.New(t.TempDir())
+	// Remove the audit boot flag: the machine is now audit-like but not
+	// confirmable, and the report must name what is missing. The registry is
+	// a pointer shared with the assembled audit service, so the mutation is
+	// visible to it.
+	f.Reg.SetDWORD(platform.HKLM, `SYSTEM\Setup\Status`, "AuditBoot", 0)
+	io, out, _ := newIO("", false)
+	if code := Run(t.Context(), f.App, io, []string{"signals"}); code != ExitOK {
+		t.Fatalf("exit = %d, want %d", code, ExitOK)
+	}
+	s := out.String()
+	if !strings.Contains(s, "Setup state uncertain") {
+		t.Errorf("state should be uncertain:\n%s", s)
+	}
+	if !strings.Contains(s, "AuditBoot") {
+		t.Errorf("the summary should name the missing audit boot flag:\n%s", s)
 	}
 }

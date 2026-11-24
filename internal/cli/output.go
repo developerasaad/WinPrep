@@ -16,6 +16,7 @@ func usageText() string {
 		"Commands:",
 		"  persist   Verify the laptop is ready for customer demonstrations",
 		"  clean     Prepare the laptop for handover to a buyer (clean up, reseal)",
+		"  signals   Print the collected setup-state signals (read-only diagnostics)",
 		"  help      Show full help",
 		"  version   Show the version",
 		"",
@@ -35,6 +36,7 @@ func helpText(a *app.App) string {
 	b.WriteString("  winprep persist          Verify the laptop is ready for demonstrations\n")
 	b.WriteString("  winprep clean            Prepare the laptop for handover to a buyer\n")
 	b.WriteString("  winprep clean --dry-run  Inspect and preview the cleanup; change nothing\n")
+	b.WriteString("  winprep signals          Print the setup-state signals this machine reports\n")
 	b.WriteString("  winprep help             Show this help\n")
 	b.WriteString("  winprep version          Show the version\n")
 	b.WriteString("\nCommands:\n")
@@ -53,6 +55,11 @@ func helpText(a *app.App) string {
 	b.WriteString("    Important: resealing is not a factory reset and not a secure erase.\n")
 	b.WriteString("    Accounts, files, and traces from preparation and customer testing remain\n")
 	b.WriteString("    on the disk. Wipe the disk separately if the laptop's data must be gone.\n")
+	b.WriteString("\n  signals\n")
+	b.WriteString("    Prints every Windows setup-state signal the detector collected, where\n")
+	b.WriteString("    each value came from, and how the deployment mode was evaluated. Read-\n")
+	b.WriteString("    only; used to troubleshoot a machine that WinPrep refuses to treat as\n")
+	b.WriteString("    Audit Mode (see docs/troubleshooting.md).\n")
 	b.WriteString("\nExit codes:\n")
 	b.WriteString("  0  success (or: inspection-only command finished with findings shown)\n")
 	b.WriteString("  1  the command failed or was declined\n")

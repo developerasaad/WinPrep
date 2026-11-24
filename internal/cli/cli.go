@@ -44,9 +44,17 @@ func Run(ctx context.Context, a *app.App, io IO, args []string) int {
 
 	switch cmd {
 	case "persist":
+		if code := rejectArgs(io, rest, "persist"); code != ExitOK {
+			return code
+		}
 		return runPersist(ctx, a, io)
 	case "clean":
 		return runClean(ctx, a, io, rest)
+	case "signals":
+		if code := rejectArgs(io, rest, "signals"); code != ExitOK {
+			return code
+		}
+		return runSignals(ctx, a, io)
 	case "help", "--help", "-h", "/?":
 		fmt.Fprint(io.Out, helpText(a))
 		return ExitOK
@@ -170,6 +178,17 @@ func runClean(ctx context.Context, a *app.App, io IO, args []string) int {
 		return ExitOK
 	}
 	return ExitFail
+}
+
+// rejectArgs refuses unexpected options so commands with no options do not
+// silently accept typos like "persist --dry-run".
+func rejectArgs(io IO, args []string, cmd string) int {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return usageError(io, fmt.Sprintf("unknown option for %s: %s", cmd, arg))
+		}
+	}
+	return ExitOK
 }
 
 func isAffirmative(s string) bool {

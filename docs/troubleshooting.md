@@ -5,6 +5,66 @@ Sysprep problems, the logs under `%WINDIR%\System32\Sysprep\Panther`
 (`setupact.log`, `setuperr.log`) and `%WINDIR%\Panther` are the primary
 evidence; WinPrep points at them whenever a handover fails.
 
+## WinPrep does not recognize a genuine Audit Mode session
+
+This is the most important case to report, because a machine that is really
+in Audit Mode but reports "uncertain" or "unknown" means a signal assumption
+no longer holds. Do **not** fix it by editing the setup-state registry values
+by hand - that only masks which signal is actually missing and can leave the
+machine in a state no tool can reason about.
+
+What to do, in order:
+
+1. Check the obvious causes first, which the refusal text names:
+   - WinPrep must run inside the Audit Mode session. Boot the machine, let
+     it sign in as the built-in Administrator, then run WinPrep there.
+   - The session must be the built-in Administrator (RID 500). Audit Mode
+     signs in as that account; if you created another account and signed in
+     as it, sign out and back in as the built-in Administrator.
+2. Run `winprep signals` in the same window. It prints every raw value the
+   detector read, where each one came from, and how the state was evaluated.
+   It is read-only and collects setup-state values and the session SID only.
+3. Compare the "Session user SID" line with the output of `whoami /user`
+   run in the same console.
+4. If the report shows a signal you expected to be set (usually the audit
+   boot flag, `HKLM\SYSTEM\Setup\Status\AuditBoot`) but it reads "not
+   present" on a machine that is demonstrably in Audit Mode, that is exactly
+   the evidence a bug report needs. Open an issue with the full
+   `winprep signals` output and the `whoami /user` output.
+
+If you prefer to collect the evidence by hand instead, these read-only
+commands show the same values:
+
+```
+reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State"
+reg query "HKLM\SYSTEM\Setup"
+reg query "HKLM\SYSTEM\Setup\Status" /v AuditBoot
+type "%WINDIR%\Setup\State\State.ini"
+whoami /user
+```
+
+How WinPrep decides, so the output makes sense: the setup state comes from
+`ImageState` (the value real Windows installations write; the StateName
+value named in older Microsoft documentation prose is read as a fallback),
+and a live Audit Mode session is confirmed only when the state is
+`IMAGE_STATE_UNDEPLOYABLE` or one of the documented
+`IMAGE_STATE_*_RESEAL_TO_AUDIT` values, the audit boot flag is set, OOBE is
+not in progress, and the session runs as the built-in Administrator.
+Anything missing or contradictory stays "uncertain", and uncertain machines
+get no state-changing operations - that is deliberate. In particular,
+`HKLM\SYSTEM\Setup\CmdLine` is reported but never used as a gate: on real
+systems that value carries whatever the setup engine queued before logon
+(`oobe\windeploy.exe`, `SetupComplete.cmd`, or nothing), not "audit.exe".
+
+Known limitation, stated honestly: the audit boot flag is confirmed by field
+evidence on Windows 7 through 10 audit machines, but Microsoft does not
+officially document it, and it has not been possible to verify its behavior
+on a real Windows 11 Audit Mode installation during development. A Windows
+11 machine that is genuinely in Audit Mode but reports the flag absent would
+be classified "uncertain" with the reason spelled out - not misdetected. If
+that happens to you, the `winprep signals` report is precisely what the bug
+report needs to extend the rules with real evidence.
+
 ## The handover is refused
 
 The refusal message names the blocking checks. Common causes:
@@ -28,9 +88,11 @@ The refusal message names the blocking checks. Common causes:
 - **"Additional user data is present"** - Profile folders or orphaned
   profile directories remain. Remove them through Windows (System
   Properties > User Profiles) so Windows cleans them up, then retry.
-- **"The Windows setup state could not be determined"** - The registry
-  signals were missing or conflicting. Restart and try again; if it
-  persists, please file a bug report with the inspection output.
+- **"The Windows setup state could not be determined"** or **"Setup state
+  uncertain"** - The signals were missing, unreadable, or conflicting. See
+  [WinPrep does not recognize a genuine Audit Mode
+  session](#winprep-does-not-recognize-a-genuine-audit-mode-session) above;
+  the `winprep signals` report shows exactly what was read.
 - **"Microsoft Edge / Google Chrome is still running"** - Browsing data
   cannot be removed while its browser runs. Close it fully - note that
   Edge's "Startup Boost" feature keeps background processes alive after

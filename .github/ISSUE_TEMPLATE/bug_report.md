@@ -20,6 +20,13 @@ dry run or a real handover.
 - In Audit Mode, normal installation, or first-time setup:
 - Elevated Command Prompt or not:
 
+If the problem is that WinPrep did not recognize your Audit Mode session,
+also paste the full output of `winprep signals` (read-only) and of
+`whoami /user` run in the same window - see
+docs/troubleshooting.md, "WinPrep does not recognize a genuine Audit Mode
+session". Please do not edit Windows setup-state registry values to work
+around the problem; that destroys the evidence needed to fix it.
+
 **Output**
 
 Paste the relevant output between the backticks. If Sysprep failed, also
